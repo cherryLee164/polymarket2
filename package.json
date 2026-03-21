@@ -6,12 +6,26 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "monitor": "node scripts/monitor-launcher.js",
+    "monitor:1h": "node scripts/monitor.js",
+    "monitor:4h": "set MONITOR_VARIANT=4h&& set MONITOR_WINDOW_HOURS=4&& set MONITOR_WINDOW_MINUTES=240&& node scripts/monitor.js",
+    "monitor:15m": "set MONITOR_VARIANT=15m&& set MONITOR_WINDOW_HOURS=0.25&& set MONITOR_WINDOW_MINUTES=15&& node scripts/monitor.js",
+    "monitor:5m": "set MONITOR_VARIANT=5m&& set MONITOR_WINDOW_HOURS=0.0833333333&& set MONITOR_WINDOW_MINUTES=5&& node scripts/monitor.js",
+    "order": "node scripts/order-launcher.js",
+    "order:1h": "set ORDER_VARIANT=1h&& python scripts/order.py",
+    "order:4h": "set ORDER_VARIANT=4h&& python scripts/order.py",
+    "order:5m": "set ORDER_VARIANT=5m&& python scripts/order.py",
+    "settlement": "node scripts/settlement-launcher.js"
   },
   "dependencies": {
+    "@polymarket/builder-relayer-client": "^0.0.8",
+    "@polymarket/clob-client": "^5.8.0",
+    "ethers": "^5.8.0",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "viem": "^2.47.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
