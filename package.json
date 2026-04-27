@@ -14,9 +14,12 @@
     "monitor:5m": "set MONITOR_VARIANT=5m&& set MONITOR_WINDOW_HOURS=0.0833333333&& set MONITOR_WINDOW_MINUTES=5&& node scripts/monitor.js",
     "weather:sync": "node scripts/weather_sync_launcher.js",
     "weather:sync:worker": "node scripts/weather_sync.js",
+    "weather:settlement": "node scripts/weather_settlement_worker.js",
+    "weather:settlement:once": "node scripts/weather_settlement_worker.js --once",
     "order": "node scripts/order-launcher.js",
     "order:recovery": "node scripts/order_recovery_launcher.js",
     "settlement:recovery": "node scripts/settlement_recovery_launcher.js",
+    "settlement:once": "node scripts/settlement_recovery_launcher.js --once",
     "order:1h": "set ORDER_VARIANT=1h&& python scripts/order.py",
     "order:4h": "set ORDER_VARIANT=4h&& python scripts/order.py",
     "order:5m": "set ORDER_VARIANT=5m&& python scripts/order.py"

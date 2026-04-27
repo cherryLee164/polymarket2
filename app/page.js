@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getMonitorSnapshot } from "@/lib/monitor-data";
 import { MonitorAutoRefresh } from "@/app/components/monitor-auto-refresh";
 import { MonitorSectionPanel } from "@/app/components/monitor-section";
+import { WeatherReviewPanel } from "@/app/components/weather-review-section";
 import { WeatherSectionPanel } from "@/app/components/weather-section";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,59 @@ function buildHomeHref(currentQuery, patch) {
   return queryString ? `/?${queryString}` : "/";
 }
 
+function WeatherTabs({ currentQuery }) {
+  const activeTab = currentQuery.weatherTab === "review" ? "review" : "live";
+  const tabs = [
+    {
+      id: "live",
+      label: "实盘明细",
+      helper: "收益、服务状态和今日下单明细",
+    },
+    {
+      id: "review",
+      label: "复盘数据",
+      helper: "昨日亏损、温差和正偏差排行",
+    },
+  ];
+
+  return (
+    <section className="rounded-[2rem] border border-[var(--line)] bg-[rgba(255,255,255,0.58)] p-3 shadow-[var(--shadow)]">
+      <div className="grid gap-3 md:grid-cols-2">
+        {tabs.map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <Link
+              key={tab.id}
+              href={buildHomeHref(currentQuery, { surface: "weather", weatherTab: tab.id })}
+              className={`rounded-[1.55rem] border px-5 py-4 transition ${
+                active
+                  ? "border-[var(--accent-strong)] bg-[linear-gradient(135deg,rgba(214,122,67,0.20),rgba(255,255,255,0.86))] shadow-[0_14px_36px_rgba(184,87,38,0.14)]"
+                  : "border-[var(--line)] bg-[rgba(255,255,255,0.64)] hover:border-[var(--accent-strong)]"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-display text-2xl font-semibold tracking-[0.04em] text-neutral-950">
+                  {tab.label}
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    active
+                      ? "bg-[var(--accent-strong)] text-[var(--accent-ink)]"
+                      : "border border-[var(--line)] text-[var(--ink-soft)]"
+                  }`}
+                >
+                  TAB
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-[var(--ink-soft)]">{tab.helper}</p>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default async function Home({ searchParams }) {
   const resolvedSearchParams = await searchParams;
   const currentQuery = {
@@ -39,9 +93,11 @@ export default async function Home({ searchParams }) {
       getParam(resolvedSearchParams, "monitorPage") ||
       getParam(resolvedSearchParams, "page") ||
       "1",
+    weatherTab: getParam(resolvedSearchParams, "weatherTab", "live"),
   };
 
   const isWeatherSurface = currentQuery.surface === "weather";
+  const weatherTab = currentQuery.weatherTab === "review" ? "review" : "live";
   const monitorSnapshot = isWeatherSurface
     ? null
     : getMonitorSnapshot({
@@ -77,7 +133,7 @@ export default async function Home({ searchParams }) {
 
             <div className="flex flex-wrap items-center gap-3">
               <Link
-                href={buildHomeHref(currentQuery, { surface: "btc" })}
+                href={buildHomeHref(currentQuery, { surface: "btc", weatherTab: undefined })}
                 className={`rounded-full px-5 py-3 text-sm font-semibold transition ${
                   !isWeatherSurface
                     ? "bg-[linear-gradient(135deg,var(--accent),var(--accent-strong))] text-[var(--accent-ink)] shadow-[0_12px_30px_rgba(184,87,38,0.22)]"
@@ -107,7 +163,10 @@ export default async function Home({ searchParams }) {
         </header>
 
         {isWeatherSurface ? (
-          <WeatherSectionPanel />
+          <>
+            <WeatherTabs currentQuery={currentQuery} />
+            {weatherTab === "review" ? <WeatherReviewPanel /> : <WeatherSectionPanel />}
+          </>
         ) : (
           <>
             <MonitorAutoRefresh

@@ -75,7 +75,7 @@ def normalize_base_stake(value: Any) -> int:
 
 def build_stake_sequence(base_stake: Any) -> List[float]:
     base = normalize_base_stake(base_stake)
-    return [float(base), float(base * 2), float(base * 3)]
+    return [float(base * multiplier) for multiplier in (1, 2, 2, 3, 5)]
 
 
 def format_stake_sequence(sequence: List[float]) -> str:
@@ -98,7 +98,7 @@ def read_live_stake_settings() -> Dict[str, Any]:
                 parsed.append(float(item))
             except Exception:
                 continue
-        sequence = parsed or [1.0, 2.0, 3.0]
+        sequence = parsed or [1.0, 2.0, 2.0, 3.0, 5.0]
     else:
         config = read_json(WEATHER_CONFIG_PATH, {})
         sequence = build_stake_sequence(config.get("liveBaseStake"))
@@ -225,6 +225,47 @@ def upsert_live_order(live_orders: List[Dict[str, Any]], record: Dict[str, Any])
     live_orders.append(record)
 
 
+def accounting_stake_usd(record: Dict[str, Any]) -> float:
+    for key in ("requestedStakeUsd", "stakeUsd", "actualBuyCostUsd"):
+        value = as_float(record.get(key))
+        if value > 0:
+            return value
+    return 0.0
+
+
+def estimated_no_win_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    existing = record.get("estimatedNoWinPnlUsd")
+    if existing not in (None, ""):
+        return round_money(existing, 6)
+    stake = accounting_stake_usd(record)
+    price = as_float(record.get("buyNoPrice"))
+    if stake <= 0 or price <= 0:
+        return None
+    return round_money(stake / price - stake, 6)
+
+
+def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    if str(record.get("status") or "").lower() != "resolved":
+        return None
+    outcome = str(record.get("resolvedOutcome") or "").strip().lower()
+    if not outcome:
+        result = str(record.get("result") or "").strip().lower()
+        legacy_pnl = as_float(record.get("pnlUsd"))
+        if result == "profit" or legacy_pnl > 0:
+            outcome = "no"
+        elif result == "loss" or legacy_pnl < 0:
+            outcome = "yes"
+    if outcome == "no":
+        return estimated_no_win_pnl_usd(record)
+    if outcome == "yes":
+        stake = accounting_stake_usd(record)
+        return round_money(-stake, 6) if stake > 0 else None
+    existing = record.get("accountingPnlUsd")
+    if existing not in (None, ""):
+        return round_money(existing, 6)
+    return None
+
+
 def compute_city_stake(city_slug: str, live_orders: List[Dict[str, Any]], target_date: str) -> Dict[str, Any]:
     city_rows = [
         item
@@ -241,12 +282,12 @@ def compute_city_stake(city_slug: str, live_orders: List[Dict[str, Any]], target
         day_rows = by_date[date_key]
         if any(row.get("status") != "resolved" for row in day_rows):
             continue
-        day_pnl = sum(float(row.get("pnlUsd") or 0.0) for row in day_rows)
-        cycle_pnl += day_pnl
-        if cycle_pnl > 0:
+        day_pnl = sum(accounting_pnl_usd(row) or 0.0 for row in day_rows)
+        if day_pnl > 0:
             cycle_pnl = 0.0
             step_index = 0
         elif STAKE_SEQUENCE:
+            cycle_pnl += day_pnl
             step_index = min(step_index + 1, len(STAKE_SEQUENCE) - 1)
 
     stake_usd = STAKE_SEQUENCE[step_index] if STAKE_SEQUENCE else BASE_STAKE_USD

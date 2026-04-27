@@ -259,6 +259,44 @@ def compute_live_payout(record: Dict[str, Any], aggregate: Dict[str, float]) -> 
     return None, None
 
 
+def accounting_stake_usd(record: Dict[str, Any]) -> float:
+    for key in ("requestedStakeUsd", "stakeUsd", "actualBuyCostUsd"):
+        value = as_float(record.get(key))
+        if value > EPSILON:
+            return value
+    return 0.0
+
+
+def estimated_no_win_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    existing = record.get("estimatedNoWinPnlUsd")
+    if existing not in (None, ""):
+        return round_money(existing)
+    stake = accounting_stake_usd(record)
+    price = as_float(record.get("buyNoPrice"))
+    if stake <= EPSILON or price <= EPSILON:
+        return None
+    return round_money(stake / price - stake)
+
+
+def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    if str(record.get("status") or "").lower() != "resolved":
+        return None
+    outcome = str(record.get("resolvedOutcome") or "").strip().lower()
+    if not outcome:
+        result = str(record.get("result") or "").strip().lower()
+        legacy_pnl = as_float(record.get("pnlUsd"))
+        if result == "profit" or legacy_pnl > 0:
+            outcome = "no"
+        elif result == "loss" or legacy_pnl < 0:
+            outcome = "yes"
+    if outcome == "no":
+        return estimated_no_win_pnl_usd(record)
+    if outcome == "yes":
+        stake = accounting_stake_usd(record)
+        return round_money(-stake) if stake > EPSILON else None
+    return None
+
+
 def no_fill_update(record: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
     status = str(record.get("status") or "").lower()
     placed_at = parse_timestamp(record.get("placedAt"))
@@ -336,10 +374,15 @@ def reconcile_record(record: Dict[str, Any], trader) -> Tuple[Dict[str, Any], bo
         updates["result"] = "pending"
 
     if payout is not None and pnl is not None:
+        resolved_record = {**record, **updates}
+        accounting_pnl = accounting_pnl_usd(resolved_record)
         updates.update(
             {
                 "payoutUsd": round_money(payout),
                 "pnlUsd": round_money(pnl),
+                "accountingStakeUsd": round_money(accounting_stake_usd(resolved_record)),
+                "accountingPnlUsd": accounting_pnl,
+                "accountingPnlMethod": "estimated-win-or-stake-loss" if accounting_pnl is not None else None,
                 "result": "profit" if pnl > 0 else "loss" if pnl < 0 else "flat",
             }
         )

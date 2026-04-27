@@ -62,6 +62,15 @@ function renderPnlClass(value) {
   return numeric > 0 ? "text-[var(--signal-up)]" : "text-[var(--signal-down)]";
 }
 
+function getWeatherResultPnlUsd(row) {
+  const accounting = Number(row?.accountingPnlUsd);
+  if (Number.isFinite(accounting)) {
+    return accounting;
+  }
+  const fallback = Number(row?.pnlUsd);
+  return Number.isFinite(fallback) ? fallback : null;
+}
+
 function estimateNoWinPnlUsd(row) {
   const existing = Number(row?.estimatedNoWinPnlUsd);
   if (Number.isFinite(existing)) {
@@ -107,7 +116,7 @@ function getLiveStatusLabel(row) {
     return "待结算";
   }
   if (status === "resolved") {
-    return Number(row?.pnlUsd) >= 0 ? "盈利" : "亏损";
+    return Number(getWeatherResultPnlUsd(row)) >= 0 ? "盈利" : "亏损";
   }
   if (status === "no-fill") {
     return "未成交";
@@ -315,8 +324,8 @@ function LiveRecordTable({ title, rows }) {
                   <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(row.estimatedNoWinPnlUsd)}`}>
                     {formatMoney(row.estimatedNoWinPnlUsd)}
                   </td>
-                  <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(row.pnlUsd)}`}>
-                    {row.status === "pending" ? "--" : formatMoney(row.pnlUsd)}
+                  <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(getWeatherResultPnlUsd(row))}`}>
+                    {row.status === "pending" ? "--" : formatMoney(getWeatherResultPnlUsd(row))}
                   </td>
                 </tr>
               ))
@@ -374,7 +383,7 @@ export async function WeatherSectionPanel() {
 
           <WeatherLiveControls
             currentBaseStake={liveConfig.liveBaseStake || 1}
-            sequenceLabel={liveConfig.liveSequenceLabel || "1-2-3"}
+            sequenceLabel={liveConfig.liveSequenceLabel || "1-2-2-3-5"}
             serviceStatus={snapshot.serviceStatus}
           />
         </div>

@@ -140,7 +140,7 @@ export function WeatherLiveControls({ currentBaseStake, sequenceLabel, serviceSt
               <div>
                 <h3 className="font-display text-2xl font-semibold text-neutral-950">天气实盘设置</h3>
                 <p className="mt-2 text-sm text-[var(--ink-soft)]">
-                  输入初始倍数，范围 1 到 5。保存后按 n / 2n / 3n 生效。
+                  输入初始额度，保存后按 n / 2n / 2n / 3n / 5n 生效；盈利后回到第一档。
                 </p>
               </div>
               <button
@@ -154,7 +154,7 @@ export function WeatherLiveControls({ currentBaseStake, sequenceLabel, serviceSt
 
             <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
               <label className="block">
-                <span className="text-sm text-[var(--ink-soft)]">初始倍数</span>
+                <span className="text-sm text-[var(--ink-soft)]">初始额度</span>
                 <input
                   type="number"
                   min="1"

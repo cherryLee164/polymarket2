@@ -22,6 +22,12 @@ RECOVERY_REPORTS_DIR = Path(
         str(ROOT_DIR / "data" / "orders_recovery" / "reports"),
     )
 ).expanduser()
+WEATHER_LIVE_ORDERS_PATH = Path(
+    order_engine.get_first_env(
+        ["ORDER_AUTO_REDEEM_WEATHER_LIVE_ORDERS_PATH"],
+        str(ROOT_DIR / "data" / "weather_predictions" / "live-orders.json"),
+    )
+).expanduser()
 COOLDOWN_MS = order_engine.ORDER_REDEEM_RETRY_COOLDOWN_MS
 AUTO_SELL_ENABLED = order_engine.parse_bool(
     order_engine.get_first_env(["ORDER_AUTO_SELL_ENABLED"], "true"),
@@ -307,12 +313,41 @@ def get_recovery_tracked_slugs() -> set[str]:
     return tracked
 
 
+def get_weather_tracked_slugs() -> set[str]:
+    tracked = set()
+    rows = order_engine.read_json_file(WEATHER_LIVE_ORDERS_PATH)
+    if not isinstance(rows, list):
+        return tracked
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        fill_status = str(row.get("fillStatus") or "").strip().lower()
+        spent_usd = (
+            order_engine.parse_float(row.get("actualBuyCostUsd"), 0.0)
+            or order_engine.parse_float(row.get("spentUsd"), 0.0)
+            or order_engine.parse_float(row.get("stakeUsd"), 0.0)
+            or 0.0
+        )
+        has_order = bool(row.get("orderId") or row.get("orderIds"))
+        if status in {"failed", "skipped", "cancelled", "canceled", "no-fill"} and spent_usd <= 0:
+            continue
+        if spent_usd <= 0 and not has_order and fill_status not in {"bot-order-fill", "position-detected"}:
+            continue
+        slug = str(row.get("eventSlug") or row.get("slug") or "").strip().lower()
+        if slug:
+            tracked.add(slug)
+    return tracked
+
+
 def get_tracked_slugs() -> set[str]:
     source = AUTO_REDEEM_TRACK_SOURCE
     if source == "recovery":
         return get_recovery_tracked_slugs()
-    if source in {"all", "both"}:
-        return get_legacy_tracked_slugs() | get_recovery_tracked_slugs()
+    if source == "weather":
+        return get_weather_tracked_slugs()
+    if source in {"all", "both", "combined"}:
+        return get_legacy_tracked_slugs() | get_recovery_tracked_slugs() | get_weather_tracked_slugs()
     return get_legacy_tracked_slugs()
 
 

@@ -9,8 +9,9 @@ const LOCKS_DIR = path.join(ROOT_DIR, "data", "locks");
 const LOCK_PATH = path.join(LOCKS_DIR, "weather-settlement.lock.json");
 const DATA_DIR = path.join(ROOT_DIR, "data", "weather_predictions", "redeems");
 const START_HOUR = Number(process.env.WEATHER_SETTLEMENT_START_HOUR || 16);
-const INTERVAL_MS = Number(process.env.WEATHER_SETTLEMENT_INTERVAL_MS || 60 * 60 * 1000);
+const INTERVAL_MS = Number(process.env.WEATHER_SETTLEMENT_INTERVAL_MS || 2 * 60 * 60 * 1000);
 const TZ = "Asia/Shanghai";
+const RUN_ONCE = process.argv.includes("--once");
 
 let shuttingDown = false;
 
@@ -198,7 +199,17 @@ async function main() {
     process.exit(0);
   });
 
-  log(`started startHour=${START_HOUR}:00 interval=${Math.round(INTERVAL_MS / 60000)}m`);
+  log(`started mode=${RUN_ONCE ? "once" : "loop"} startHour=${START_HOUR}:00 interval=${Math.round(INTERVAL_MS / 60000)}m`);
+  if (RUN_ONCE) {
+    const waitMs = msUntilNextStart(new Date());
+    if (waitMs > 0) {
+      log(`before ${START_HOUR}:00, skip one-shot settlement`);
+      return;
+    }
+    runOnce();
+    return;
+  }
+
   while (!shuttingDown) {
     const waitMs = msUntilNextStart(new Date());
     if (waitMs > 0) {

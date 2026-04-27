@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const PYTHON_BIN = process.env.PYTHON || "python";
@@ -9,6 +9,14 @@ const SCRIPT_PATH = path.join(ROOT_DIR, "scripts", "auto_redeem.py");
 const LOCKS_DIR = path.join(ROOT_DIR, "data", "locks");
 const LOCK_PATH = path.join(LOCKS_DIR, "settlement-recovery-launcher.lock.json");
 const RESTART_DELAY_MS = Number(process.env.RECOVERY_SETTLEMENT_RESTART_DELAY_MS || 5000);
+const RUN_ONCE = process.argv.includes("--once");
+const DEFAULT_SETTLEMENT_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_MAX_SELLS_PER_RUN = 50;
+const DEFAULT_REDEEM_SLUG_PREFIXES = [
+  "bitcoin-up-or-down-",
+  "btc-updown-",
+  "highest-temperature-in-",
+].join(",");
 
 let child = null;
 let shuttingDown = false;
@@ -110,39 +118,85 @@ function wireOutput(stream, label, target) {
   rl.on("close", () => safeWrite(target, `[${label}] stream closed\n`));
 }
 
+function buildSettlementEnv() {
+  return {
+    ...process.env,
+    ORDER_SETTLEMENT_IDLE_INTERVAL_MS: String(
+      process.env.SETTLEMENT_IDLE_INTERVAL_MS ||
+        process.env.SETTLEMENT_INTERVAL_MS ||
+        DEFAULT_SETTLEMENT_INTERVAL_MS,
+    ),
+    ORDER_SETTLEMENT_ACTIVE_INTERVAL_MS: String(
+      process.env.SETTLEMENT_ACTIVE_INTERVAL_MS ||
+        process.env.SETTLEMENT_INTERVAL_MS ||
+        DEFAULT_SETTLEMENT_INTERVAL_MS,
+    ),
+    ORDER_AUTO_REDEEM_DATA_DIR: String(
+      process.env.SETTLEMENT_DATA_DIR ||
+        path.join(ROOT_DIR, "data", "orders_recovery", "redeems"),
+    ),
+    ORDER_AUTO_REDEEM_TRACKED_ONLY: String(
+      process.env.SETTLEMENT_TRACKED_ONLY || "true",
+    ),
+    ORDER_AUTO_REDEEM_TRACK_SOURCE: String(
+      process.env.SETTLEMENT_TRACK_SOURCE || "all",
+    ),
+    ORDER_AUTO_REDEEM_SLUG_PREFIXES: String(
+      process.env.SETTLEMENT_SLUG_PREFIXES || DEFAULT_REDEEM_SLUG_PREFIXES,
+    ),
+    ORDER_AUTO_SELL_ENABLED: String(
+      process.env.SETTLEMENT_AUTO_SELL_ENABLED || "true",
+    ),
+    ORDER_AUTO_SELL_SLUG_PREFIXES: String(
+      process.env.SETTLEMENT_AUTO_SELL_SLUG_PREFIXES ||
+        process.env.SETTLEMENT_SLUG_PREFIXES ||
+        DEFAULT_REDEEM_SLUG_PREFIXES,
+    ),
+    ORDER_AUTO_CLAIM_ENABLED: String(
+      process.env.SETTLEMENT_AUTO_CLAIM_ENABLED || "true",
+    ),
+    ORDER_SETTLEMENT_MAX_SELLS_PER_RUN: String(
+      process.env.SETTLEMENT_MAX_SELLS_PER_RUN || DEFAULT_MAX_SELLS_PER_RUN,
+    ),
+    ORDER_SETTLEMENT_MAX_CLAIMS_PER_RUN: String(
+      process.env.SETTLEMENT_MAX_CLAIMS_PER_RUN ||
+        process.env.RECOVERY_SETTLEMENT_MAX_CLAIMS_PER_RUN ||
+        50,
+    ),
+  };
+}
+
+function runOnce() {
+  const result = spawnSync(PYTHON_BIN, ["-u", SCRIPT_PATH, "--once"], {
+    cwd: ROOT_DIR,
+    env: buildSettlementEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    timeout: Number(process.env.SETTLEMENT_ONCE_TIMEOUT_MS || 10 * 60 * 1000),
+    windowsHide: false,
+  });
+  if (result.stdout?.trim()) {
+    for (const line of result.stdout.trim().split(/\r?\n/)) {
+      safeWrite(process.stdout, `[SETTLEMENT] ${line}\n`);
+    }
+  }
+  if (result.stderr?.trim()) {
+    for (const line of result.stderr.trim().split(/\r?\n/)) {
+      safeWrite(process.stderr, `[SETTLEMENT] ${line}\n`);
+    }
+  }
+  if (result.error) {
+    safeWrite(process.stderr, `[SETTLEMENT] failed: ${result.error.message || result.error}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.exitCode = result.status || 0;
+}
+
 function startWorker() {
   child = spawn(PYTHON_BIN, ["-u", SCRIPT_PATH], {
     cwd: ROOT_DIR,
-    env: {
-      ...process.env,
-      ORDER_SETTLEMENT_IDLE_INTERVAL_MS: String(
-        process.env.ORDER_SETTLEMENT_IDLE_INTERVAL_MS || 120000,
-      ),
-      ORDER_SETTLEMENT_ACTIVE_INTERVAL_MS: String(
-        process.env.ORDER_SETTLEMENT_ACTIVE_INTERVAL_MS || 120000,
-      ),
-      ORDER_AUTO_REDEEM_DATA_DIR: String(
-        process.env.ORDER_AUTO_REDEEM_DATA_DIR ||
-          path.join(ROOT_DIR, "data", "orders_recovery", "redeems"),
-      ),
-      ORDER_AUTO_REDEEM_TRACKED_ONLY: String(
-        process.env.ORDER_AUTO_REDEEM_TRACKED_ONLY || "true",
-      ),
-      ORDER_AUTO_REDEEM_TRACK_SOURCE: String(
-        process.env.ORDER_AUTO_REDEEM_TRACK_SOURCE || "recovery",
-      ),
-      ORDER_AUTO_SELL_ENABLED: String(
-        process.env.ORDER_AUTO_SELL_ENABLED || "false",
-      ),
-      ORDER_AUTO_CLAIM_ENABLED: String(
-        process.env.ORDER_AUTO_CLAIM_ENABLED || "true",
-      ),
-      ORDER_SETTLEMENT_MAX_CLAIMS_PER_RUN: String(
-        process.env.RECOVERY_SETTLEMENT_MAX_CLAIMS_PER_RUN ||
-          process.env.ORDER_SETTLEMENT_MAX_CLAIMS_PER_RUN ||
-          20,
-      ),
-    },
+    env: buildSettlementEnv(),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: false,
   });
@@ -191,4 +245,9 @@ process.on("exit", releaseLock);
 process.on("SIGINT", () => stopAll("SIGINT"));
 process.on("SIGTERM", () => stopAll("SIGTERM"));
 
-startWorker();
+if (RUN_ONCE) {
+  runOnce();
+  releaseLock();
+} else {
+  startWorker();
+}
