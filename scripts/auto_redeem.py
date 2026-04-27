@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,9 +10,18 @@ import order as order_engine
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "data" / "orders" / "redeems"
+DEFAULT_DATA_DIR = ROOT_DIR / "data" / "orders" / "redeems"
+DATA_DIR = Path(
+    order_engine.get_first_env(["ORDER_AUTO_REDEEM_DATA_DIR"], str(DEFAULT_DATA_DIR))
+).expanduser()
 STATE_PATH = DATA_DIR / "auto-redeem-state.json"
 LOG_PATH = DATA_DIR / "auto-redeem-log.jsonl"
+RECOVERY_REPORTS_DIR = Path(
+    order_engine.get_first_env(
+        ["ORDER_AUTO_REDEEM_RECOVERY_REPORTS_DIR"],
+        str(ROOT_DIR / "data" / "orders_recovery" / "reports"),
+    )
+).expanduser()
 COOLDOWN_MS = order_engine.ORDER_REDEEM_RETRY_COOLDOWN_MS
 AUTO_SELL_ENABLED = order_engine.parse_bool(
     order_engine.get_first_env(["ORDER_AUTO_SELL_ENABLED"], "true"),
@@ -43,6 +53,17 @@ AUTO_REDEEM_TRACKED_ONLY = order_engine.parse_bool(
     order_engine.get_first_env(["ORDER_AUTO_REDEEM_TRACKED_ONLY"], "true"),
     True,
 )
+AUTO_REDEEM_TRACK_SOURCE = (
+    order_engine.get_first_env(["ORDER_AUTO_REDEEM_TRACK_SOURCE"], "legacy").strip().lower()
+)
+AUTO_REDEEM_SLUG_PREFIXES = tuple(
+    prefix.strip().lower()
+    for prefix in order_engine.get_first_env(
+        ["ORDER_AUTO_REDEEM_SLUG_PREFIXES"],
+        "",
+    ).split(",")
+    if prefix.strip()
+)
 AUTO_SELL_SLUG_PREFIXES = tuple(
     prefix.strip().lower()
     for prefix in order_engine.get_first_env(
@@ -51,6 +72,7 @@ AUTO_SELL_SLUG_PREFIXES = tuple(
     ).split(",")
     if prefix.strip()
 )
+QUOTA_RESET_PATTERN = re.compile(r"quota exceeded: .*?resets in (\d+) seconds", re.IGNORECASE)
 
 
 def ensure_dir(path: Path) -> None:
@@ -75,12 +97,16 @@ def compact_cycle_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "afterBalanceUsd": summary.get("afterBalanceUsd"),
         "busy": summary.get("busy"),
         "trackedSlugCount": summary.get("trackedSlugCount"),
+        "trackedSlugSource": summary.get("trackedSlugSource"),
         "redeemableCount": summary.get("redeemableCount"),
         "afterRedeemableCount": summary.get("afterRedeemableCount"),
         "claimed": summary.get("claimed"),
         "claimedCount": summary.get("claimedCount"),
         "claimErrorCount": summary.get("claimErrorCount"),
         "claimError": summary.get("claimError"),
+        "claimBackoffActive": summary.get("claimBackoffActive"),
+        "claimBackoffUntilAt": summary.get("claimBackoffUntilAt"),
+        "claimBackoffReason": summary.get("claimBackoffReason"),
         "claimApiOnly": summary.get("claimApiOnly"),
         "claimDisabled": summary.get("claimDisabled"),
         "claimDisabledReason": summary.get("claimDisabledReason"),
@@ -141,20 +167,66 @@ def compact_cycle_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_state() -> Dict[str, Any]:
     if not STATE_PATH.exists():
-        return {"conditions": {}, "assets": {}, "claims": {}}
+        return {"conditions": {}, "assets": {}, "claims": {}, "meta": {}}
     try:
         payload = json.loads(STATE_PATH.read_text(encoding="utf-8"))
         payload.setdefault("conditions", {})
         payload.setdefault("assets", {})
         payload.setdefault("claims", {})
+        payload.setdefault("meta", {})
         return payload
     except Exception:
-        return {"conditions": {}, "assets": {}, "claims": {}}
+        return {"conditions": {}, "assets": {}, "claims": {}, "meta": {}}
 
 
 def save_state(state: Dict[str, Any]) -> None:
     ensure_dir(DATA_DIR)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def extract_quota_reset_seconds(message: Optional[str]) -> Optional[int]:
+    text = str(message or "")
+    match = QUOTA_RESET_PATTERN.search(text)
+    if not match:
+        return None
+    try:
+        seconds = int(match.group(1))
+    except Exception:
+        return None
+    return max(0, seconds)
+
+
+def get_claim_backoff(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    meta = state.setdefault("meta", {})
+    until_ms = int(meta.get("claimBackoffUntilMs") or 0)
+    if until_ms <= int(time.time() * 1000):
+        if until_ms:
+            meta.pop("claimBackoffUntilMs", None)
+            meta.pop("claimBackoffUntilAt", None)
+            meta.pop("claimBackoffReason", None)
+        return None
+    return {
+        "untilMs": until_ms,
+        "untilAt": meta.get("claimBackoffUntilAt"),
+        "reason": meta.get("claimBackoffReason"),
+    }
+
+
+def apply_claim_quota_backoff(state: Dict[str, Any], message: Optional[str]) -> Optional[Dict[str, Any]]:
+    seconds = extract_quota_reset_seconds(message)
+    if seconds is None:
+        return None
+    until_ms = int(time.time() * 1000) + (seconds + 60) * 1000
+    until_at = datetime.fromtimestamp(until_ms / 1000, tz=timezone.utc).isoformat()
+    meta = state.setdefault("meta", {})
+    meta["claimBackoffUntilMs"] = until_ms
+    meta["claimBackoffUntilAt"] = until_at
+    meta["claimBackoffReason"] = str(message or "")
+    return {
+        "untilMs": until_ms,
+        "untilAt": until_at,
+        "reason": str(message or ""),
+    }
 
 
 def get_balance_snapshot(trader=None) -> Dict[str, Any]:
@@ -202,7 +274,7 @@ def fetch_open_positions(funder: str) -> List[Dict[str, Any]]:
     return positions
 
 
-def get_tracked_hour_slugs() -> set[str]:
+def get_legacy_tracked_slugs() -> set[str]:
     tracked = set()
     for file_path in order_engine.list_json_files(order_engine.HOURS_DIR):
         state = order_engine.read_json_file(file_path)
@@ -214,19 +286,45 @@ def get_tracked_hour_slugs() -> set[str]:
     return tracked
 
 
+def get_recovery_tracked_slugs() -> set[str]:
+    tracked = set()
+    if not RECOVERY_REPORTS_DIR.exists():
+        return tracked
+    for file_path in sorted(RECOVERY_REPORTS_DIR.glob("trade-details-*.json")):
+        rows = order_engine.read_json_file(file_path)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").strip().lower()
+            spent_usd = order_engine.parse_float(row.get("spentUsd"), 0.0) or 0.0
+            if status not in {"matched", "filled", "bought"} and spent_usd <= 0:
+                continue
+            slug = str(row.get("slug") or "").strip()
+            if slug:
+                tracked.add(slug)
+    return tracked
+
+
+def get_tracked_slugs() -> set[str]:
+    source = AUTO_REDEEM_TRACK_SOURCE
+    if source == "recovery":
+        return get_recovery_tracked_slugs()
+    if source in {"all", "both"}:
+        return get_legacy_tracked_slugs() | get_recovery_tracked_slugs()
+    return get_legacy_tracked_slugs()
+
+
 def is_tracked_redeemable_position(position: Dict[str, Any], tracked_slugs: set[str]) -> bool:
-    slug = str(position.get("eventSlug") or position.get("slug") or "")
+    slug = str(position.get("eventSlug") or position.get("slug") or "").lower()
+    if AUTO_REDEEM_SLUG_PREFIXES and not any(slug.startswith(prefix) for prefix in AUTO_REDEEM_SLUG_PREFIXES):
+        return False
     if not AUTO_REDEEM_TRACKED_ONLY:
         return True
     if not slug:
         return False
-    if tracked_slugs and slug in tracked_slugs:
-        return True
-    try:
-        current_value = float(position.get("currentValue") or 0)
-    except Exception:
-        current_value = 0.0
-    return current_value > 0
+    return bool(tracked_slugs) and slug in tracked_slugs
 
 
 def get_redeemable_entries(funder: str, tracked_slugs: set[str]) -> List[Dict[str, Any]]:
@@ -557,6 +655,9 @@ def execute_claim(
         mark_claim_attempt(state, entry, True, claim_summary)
     except Exception as exc:
         claim_summary["error"] = str(exc)
+        quota_backoff = apply_claim_quota_backoff(state, claim_summary["error"])
+        if quota_backoff is not None:
+            claim_summary["quotaBackoff"] = quota_backoff
         mark_claim_attempt(state, entry, False, claim_summary)
     return claim_summary
 
@@ -566,7 +667,7 @@ def process_once(state: Dict[str, Any], trader=None) -> Dict[str, Any]:
         trader = order_engine.create_trader()
         trader.initialize()
     before_balance = get_balance_snapshot(trader)
-    tracked_slugs = get_tracked_hour_slugs()
+    tracked_slugs = get_tracked_slugs()
     sell_summary = perform_auto_sell(state, trader, before_balance["funder"], before_balance)
     post_sell_balance = get_balance_snapshot(trader)
     entries = get_redeemable_entries(post_sell_balance["funder"], tracked_slugs)
@@ -603,11 +704,22 @@ def process_once(state: Dict[str, Any], trader=None) -> Dict[str, Any]:
         "claimResults": [],
         "busy": bool(sell_summary.get("candidateCount") or claim_work_enabled),
         "trackedSlugCount": len(tracked_slugs),
+        "trackedSlugSource": AUTO_REDEEM_TRACK_SOURCE,
+        "claimBackoffActive": False,
+        "claimBackoffUntilAt": None,
+        "claimBackoffReason": None,
     }
 
     if not entries:
         return summary
     if claim_disabled_reason is not None:
+        return summary
+    active_backoff = get_claim_backoff(state)
+    if active_backoff is not None:
+        summary["claimBackoffActive"] = True
+        summary["claimBackoffUntilAt"] = active_backoff.get("untilAt")
+        summary["claimBackoffReason"] = active_backoff.get("reason")
+        summary["busy"] = True
         return summary
 
     eligible_entries = [entry for entry in entries if should_attempt_claim(state, entry)]
@@ -618,14 +730,18 @@ def process_once(state: Dict[str, Any], trader=None) -> Dict[str, Any]:
     limit = len(eligible_entries) if MAX_CLAIMS_PER_RUN <= 0 else MAX_CLAIMS_PER_RUN
     claim_results = []
     for entry in eligible_entries[:limit]:
-        claim_results.append(
-            execute_claim(
-                state,
-                entry,
-                funder=before_balance.get("funder"),
-                signature_type=before_balance.get("signatureType"),
-            )
+        result = execute_claim(
+            state,
+            entry,
+            funder=before_balance.get("funder"),
+            signature_type=before_balance.get("signatureType"),
         )
+        claim_results.append(result)
+        if result.get("quotaBackoff"):
+            summary["claimBackoffActive"] = True
+            summary["claimBackoffUntilAt"] = result["quotaBackoff"].get("untilAt")
+            summary["claimBackoffReason"] = result["quotaBackoff"].get("reason")
+            break
 
     summary["claimResults"] = claim_results
     summary["claimResult"] = claim_results[0] if claim_results else None
@@ -677,6 +793,14 @@ def log_cycle_summary(summary: Dict[str, Any], next_interval_ms: int) -> None:
         )
         return
 
+    if summary.get("claimBackoffActive"):
+        order_engine.log(
+            "Settlement claim backoff until "
+            f"{summary.get('claimBackoffUntilAt') or '--'} "
+            f"{summary.get('claimBackoffReason') or '--'}"
+        )
+        return
+
     if summary.get("claimError"):
         claim_result = summary.get("claimResult") if isinstance(summary.get("claimResult"), dict) else {}
         order_engine.log(
@@ -688,6 +812,7 @@ def log_cycle_summary(summary: Dict[str, Any], next_interval_ms: int) -> None:
 
     order_engine.log(
         "Settlement scan | "
+        f"source={summary.get('trackedSlugSource') or '--'} "
         f"tracked={summary.get('trackedSlugCount', 0)} "
         f"candidates={auto_sell.get('candidateCount', 0)} "
         f"redeemable={summary.get('redeemableCount', 0)} "
@@ -700,7 +825,11 @@ def should_log_cycle(summary: Dict[str, Any]) -> bool:
     sold_rows = auto_sell.get("sold") or []
     if any(bool(row.get("sold")) for row in sold_rows):
         return True
-    return bool(summary.get("claimed") or summary.get("claimError"))
+    return bool(
+        summary.get("claimed")
+        or summary.get("claimError")
+        or summary.get("claimBackoffActive")
+    )
 
 
 def main() -> None:
@@ -736,6 +865,7 @@ def main() -> None:
         f"sell={'on' if AUTO_SELL_ENABLED else 'off'} "
         f"target={AUTO_SELL_TARGET_CENTS}c "
         f"claim={claim_mode} "
+        f"trackSource={AUTO_REDEEM_TRACK_SOURCE} "
         f"maxSell={MAX_SELLS_PER_RUN}"
     )
 

@@ -1,11 +1,56 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const readline = require("readline");
+const fs = require("fs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const ORDER_SCRIPT = path.join(ROOT_DIR, "scripts", "order.py");
 const PYTHON_BIN = process.env.PYTHON || "python";
 const RESTART_DELAY_MS = Number(process.env.ORDER_LAUNCHER_RESTART_DELAY_MS || 5000);
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+  const content = fs.readFileSync(filePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const eqIndex = line.indexOf("=");
+    if (eqIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, eqIndex).trim();
+    if (!key) {
+      continue;
+    }
+    const existing = process.env[key];
+    if (existing != null && `${existing}`.trim() !== "") {
+      continue;
+    }
+    let value = line.slice(eqIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (value === "" && existing != null) {
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+
+for (const envName of [".env.order.local", ".env.order", ".env.local", ".env"]) {
+  loadEnvFile(path.join(ROOT_DIR, envName));
+}
+
+const ENABLE_4H = ["1", "true", "yes", "on"].includes(
+  String(process.env.ORDER_4H_TRADING_ENABLED || "false").trim().toLowerCase(),
+);
 
 const variants = [
   {
@@ -14,17 +59,22 @@ const variants = [
     args: ["-u", ORDER_SCRIPT],
     env: {
       ORDER_VARIANT: "1h",
+      ORDER_DRY_RUN: "true",
     },
   },
-  {
+];
+
+if (ENABLE_4H) {
+  variants.push({
     label: "4H",
     script: ORDER_SCRIPT,
     args: ["-u", ORDER_SCRIPT],
     env: {
       ORDER_VARIANT: "4h",
+      ORDER_DRY_RUN: "false",
     },
-  },
-];
+  });
+}
 
 const children = new Map();
 let shuttingDown = false;

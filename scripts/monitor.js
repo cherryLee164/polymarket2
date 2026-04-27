@@ -76,6 +76,10 @@ const THRESHOLDS = (process.env.THRESHOLDS || '45,40,35,30')
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value));
+const MONITOR_CLEANUP_INTERVAL_MS = parsePositiveNumber(
+  process.env.MONITOR_CLEANUP_INTERVAL_MS,
+  60 * 60 * 1000
+);
 const GLOBAL_RAW_RETENTION_DAYS = parsePositiveNumber(
   process.env.RAW_RETENTION_DAYS,
   null
@@ -88,41 +92,41 @@ const VARIANT_RETENTION_POLICIES = {
   '5m': {
     rawDays: parsePositiveNumber(
       process.env.RAW_RETENTION_DAYS_5M,
-      GLOBAL_RAW_RETENTION_DAYS ?? 7
+      GLOBAL_RAW_RETENTION_DAYS ?? 2
     ),
     summaryDays: parsePositiveNumber(
       process.env.SUMMARY_RETENTION_DAYS_5M,
-      GLOBAL_SUMMARY_RETENTION_DAYS ?? 60
+      GLOBAL_SUMMARY_RETENTION_DAYS ?? 2
     ),
   },
   '15m': {
     rawDays: parsePositiveNumber(
       process.env.RAW_RETENTION_DAYS_15M,
-      GLOBAL_RAW_RETENTION_DAYS ?? 14
+      GLOBAL_RAW_RETENTION_DAYS ?? 2
     ),
     summaryDays: parsePositiveNumber(
       process.env.SUMMARY_RETENTION_DAYS_15M,
-      GLOBAL_SUMMARY_RETENTION_DAYS ?? 90
+      GLOBAL_SUMMARY_RETENTION_DAYS ?? 2
     ),
   },
   '1h': {
     rawDays: parsePositiveNumber(
       process.env.RAW_RETENTION_DAYS_1H,
-      GLOBAL_RAW_RETENTION_DAYS ?? 30
+      GLOBAL_RAW_RETENTION_DAYS ?? 7
     ),
     summaryDays: parsePositiveNumber(
       process.env.SUMMARY_RETENTION_DAYS_1H,
-      GLOBAL_SUMMARY_RETENTION_DAYS ?? 180
+      GLOBAL_SUMMARY_RETENTION_DAYS ?? 7
     ),
   },
   '4h': {
     rawDays: parsePositiveNumber(
       process.env.RAW_RETENTION_DAYS_4H,
-      GLOBAL_RAW_RETENTION_DAYS ?? 60
+      GLOBAL_RAW_RETENTION_DAYS ?? 30
     ),
     summaryDays: parsePositiveNumber(
       process.env.SUMMARY_RETENTION_DAYS_4H,
-      GLOBAL_SUMMARY_RETENTION_DAYS ?? 365
+      GLOBAL_SUMMARY_RETENTION_DAYS ?? 30
     ),
   },
 };
@@ -278,6 +282,33 @@ function parsePositiveNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function extractMonitorWindowStartMs(fileName) {
+  const normalized = String(fileName || '');
+  const isoMatch = normalized.match(
+    /_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/
+  );
+  if (isoMatch) {
+    const isoValue = isoMatch[1].replace(
+      /^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/,
+      '$1$2:$3:$4.$5Z'
+    );
+    const parsedIso = Date.parse(isoValue);
+    if (Number.isFinite(parsedIso)) {
+      return parsedIso;
+    }
+  }
+
+  const unixMatch = normalized.match(/-(\d{10})_/);
+  if (unixMatch) {
+    const parsedUnix = Number(unixMatch[1]) * 1000;
+    if (Number.isFinite(parsedUnix) && parsedUnix > 0) {
+      return parsedUnix;
+    }
+  }
+
+  return null;
+}
+
 function detectMonitorVariantFromFileName(fileName) {
   const normalized = String(fileName || '').toLowerCase();
   for (const [variant, prefix] of VARIANT_FILE_PREFIXES) {
@@ -312,7 +343,9 @@ function cleanupOldFiles(dirPath, label, retentionType) {
       }
       const stats = fs.statSync(filePath);
       const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-      if (stats.mtimeMs < cutoffMs) {
+      const fileTimestampMs =
+        extractMonitorWindowStartMs(entry.name) ?? stats.mtimeMs;
+      if (fileTimestampMs < cutoffMs) {
         fs.unlinkSync(filePath);
         deleted += 1;
       }
@@ -323,6 +356,23 @@ function cleanupOldFiles(dirPath, label, retentionType) {
   if (deleted > 0) {
     log(`Cleaned ${deleted} old ${label} files`);
   }
+}
+
+let lastCleanupAtMs = 0;
+
+function runMonitorCleanup(force = false) {
+  const nowMs = Date.now();
+  if (
+    !force &&
+    Number.isFinite(MONITOR_CLEANUP_INTERVAL_MS) &&
+    MONITOR_CLEANUP_INTERVAL_MS > 0 &&
+    nowMs - lastCleanupAtMs < MONITOR_CLEANUP_INTERVAL_MS
+  ) {
+    return;
+  }
+  cleanupOldFiles(EVENTS_DIR, 'raw event', 'raw');
+  cleanupOldFiles(SUMMARY_DIR, 'summary', 'summary');
+  lastCleanupAtMs = nowMs;
 }
 
 function getPart(parts, type) {
@@ -851,8 +901,7 @@ async function main() {
   ensureDir(SUMMARY_DIR);
   ensureDir(LOCKS_DIR);
   acquireProcessLock(PROCESS_LOCK_PATH);
-  cleanupOldFiles(EVENTS_DIR, 'raw event', 'raw');
-  cleanupOldFiles(SUMMARY_DIR, 'summary', 'summary');
+  runMonitorCleanup(true);
 
   let state = await startEvent(new Date());
 
@@ -873,6 +922,8 @@ async function main() {
   });
 
   while (true) {
+    runMonitorCleanup();
+
     if (state.eventEnd && Date.now() >= state.eventEnd.getTime()) {
       await finalizeEvent(state, 'complete');
       const nextDate = new Date(state.eventEnd.getTime() + 1000);

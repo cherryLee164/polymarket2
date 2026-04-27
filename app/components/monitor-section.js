@@ -6,12 +6,6 @@ const MONITOR_VARIANT_TABS = [
   { id: "15m", label: "15M 监控" },
   { id: "1h", label: "1H 监控" },
   { id: "4h", label: "4H 监控" },
-  { id: "5m-paper", label: "5M 下单" },
-  { id: "15m-paper", label: "15M 下单" },
-  { id: "15m-paper-35x", label: "15M 下单2" },
-  { id: "1h-paper", label: "1H 下单" },
-  { id: "4h-paper", label: "4H 下单" },
-  { id: "15m-paper-37x", label: "15M 下单3" },
 ];
 const DISPLAY_TIME_ZONE = "Asia/Shanghai";
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
@@ -40,14 +34,12 @@ const CLOCK_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
 function buildHref(currentQuery, patch) {
   const params = new URLSearchParams();
   const merged = { ...currentQuery, ...patch };
-
   for (const [key, value] of Object.entries(merged)) {
     if (value === undefined || value === null || value === "") {
       continue;
     }
     params.set(key, String(value));
   }
-
   const queryString = params.toString();
   return queryString ? `/?${queryString}` : "/";
 }
@@ -57,13 +49,12 @@ function formatCount(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function formatMoney(value) {
+function formatRatioPercent(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "--";
   }
-  const sign = numeric > 0 ? "+" : "";
-  return `${sign}$${numeric.toFixed(3)}`;
+  return `${(numeric * 100).toFixed(1)}%`;
 }
 
 function formatDateTime(value) {
@@ -88,12 +79,34 @@ function formatShortClock(value) {
   return CLOCK_FORMATTER.format(parsed);
 }
 
-function formatRatioPercent(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return "--";
+function formatWindowLabel(start, end) {
+  if (!start || !end) {
+    return `${formatDateTime(start)} -> ${formatDateTime(end)}`;
   }
-  return `${(numeric * 100).toFixed(1)}%`;
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return `${formatDateTime(start)} -> ${formatDateTime(end)}`;
+  }
+  const sameDay =
+    startDate.getFullYear() === endDate.getFullYear() &&
+    startDate.getMonth() === endDate.getMonth() &&
+    startDate.getDate() === endDate.getDate();
+  const dateLabel = DATE_FORMATTER.format(startDate);
+  const exactHourBoundary =
+    startDate.getMinutes() === 0 &&
+    startDate.getSeconds() === 0 &&
+    endDate.getMinutes() === 0 &&
+    endDate.getSeconds() === 0;
+  if (sameDay && exactHourBoundary) {
+    return `${dateLabel} ${startDate.getHours()}点到${endDate.getHours()}点`;
+  }
+  if (sameDay) {
+    return `${dateLabel} ${CLOCK_FORMATTER.format(startDate)} -> ${CLOCK_FORMATTER.format(endDate)}`;
+  }
+  return `${dateLabel} ${CLOCK_FORMATTER.format(startDate)} -> ${DATE_FORMATTER.format(
+    endDate,
+  )} ${CLOCK_FORMATTER.format(endDate)}`;
 }
 
 function formatMonitorVariant(target) {
@@ -113,53 +126,17 @@ function formatMonitorVariant(target) {
   return `${hours}H`;
 }
 
-function formatWindowLabel(start, end) {
-  if (!start || !end) {
-    return `${formatDateTime(start)} -> ${formatDateTime(end)}`;
-  }
-
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-    return `${formatDateTime(start)} -> ${formatDateTime(end)}`;
-  }
-
-  const sameDay =
-    startDate.getFullYear() === endDate.getFullYear() &&
-    startDate.getMonth() === endDate.getMonth() &&
-    startDate.getDate() === endDate.getDate();
-
-  const dateLabel = DATE_FORMATTER.format(startDate);
-  const exactHourBoundary =
-    startDate.getMinutes() === 0 &&
-    startDate.getSeconds() === 0 &&
-    endDate.getMinutes() === 0 &&
-    endDate.getSeconds() === 0;
-
-  if (sameDay && exactHourBoundary) {
-    return `${dateLabel} ${startDate.getHours()}点到${endDate.getHours()}点`;
-  }
-
-  const formatClock = (value) => CLOCK_FORMATTER.format(value);
-
-  if (sameDay) {
-    return `${dateLabel} ${formatClock(startDate)}到${formatClock(endDate)}`;
-  }
-
-  return `${dateLabel} ${formatClock(startDate)} -> ${DATE_FORMATTER.format(endDate)} ${formatClock(endDate)}`;
-}
-
 function formatFirstTriggerLine(summary, side) {
   const sideLabel = side === "up" ? "上" : "下";
   const hits = summary?.firstThresholdHits?.[side];
   if (!hits || typeof hits !== "object") {
-    return `${sideLabel} 侧无触发`;
+    return `${sideLabel}侧无触发`;
   }
   const parts = MONITOR_THRESHOLDS.map((threshold) => {
     const hitAt = formatShortClock(hits[`lt${threshold}`]);
     return hitAt ? `${threshold}@${hitAt}` : null;
   }).filter(Boolean);
-  return parts.length ? `${sideLabel} ${parts.join(" / ")}` : `${sideLabel} 侧无触发`;
+  return parts.length ? `${sideLabel} ${parts.join(" / ")}` : `${sideLabel}侧无触发`;
 }
 
 function getSamplingHealthTone(summary) {
@@ -275,7 +252,6 @@ function renderThresholdSummaryCard({ label, stats, tone = "neutral" }) {
         {MONITOR_THRESHOLDS.map((threshold) => {
           const item = stats?.[`lt${threshold}`] ?? { count: 0, ratio: 0 };
           const ratioPercent = Math.max(0, Math.min(100, Number(item.ratio ?? 0) * 100));
-
           return (
             <div
               key={`${label}-${threshold}`}
@@ -318,7 +294,6 @@ function renderTabBar(currentQuery, selectedMonitorVariant) {
                 : "rounded-full border border-[var(--line)] px-5 py-3 text-sm font-semibold text-neutral-700 transition hover:border-[var(--accent-strong)] hover:text-[var(--accent-strong)]"
             }
             href={buildHref(currentQuery, {
-              view: "monitor",
               monitorVariant: tab.id,
               monitorPage: 1,
             })}
@@ -363,7 +338,7 @@ function renderPagination(currentQuery, key, pagination) {
   );
 }
 
-function renderMonitorPanel({
+export function MonitorSectionPanel({
   currentQuery,
   filters,
   pagination,
@@ -374,16 +349,15 @@ function renderMonitorPanel({
   selectedMonitorVariant,
 }) {
   return (
-    <>
+    <section className="rounded-[2rem] border border-[var(--line)] bg-[var(--panel-strong)] p-6 shadow-[var(--shadow)]">
       {renderPanelHeader(
         "Monitor matrix",
         "监控列表",
-        "按周期查看 5 分钟、15 分钟、1 小时、4 小时的有效监控结果。顶部汇总会按当前筛选范围统计双边同时达标的次数。",
+        "这里只保留监控数据。按周期查看 5 分钟、15 分钟、1 小时、4 小时的阈值命中情况和采样健康度。",
         <form
           className="grid gap-3 rounded-[1.5rem] border border-[var(--line)] bg-white/70 p-4 sm:grid-cols-[1fr_1fr_auto_auto]"
           method="GET"
         >
-          <input name="view" type="hidden" value="monitor" />
           <input name="monitorVariant" type="hidden" value={selectedMonitorVariant} />
           <label className="flex flex-col gap-2 text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">
             开始日期
@@ -412,7 +386,6 @@ function renderMonitorPanel({
           <Link
             className="rounded-full border border-[var(--line)] bg-[rgba(255,255,255,0.86)] px-5 py-3 text-center text-sm font-semibold text-[var(--ink-soft)] transition hover:border-[var(--accent-strong)] hover:text-[var(--accent-strong)]"
             href={buildHref(currentQuery, {
-              view: "monitor",
               startDate: "",
               endDate: "",
               monitorPage: 1,
@@ -428,7 +401,9 @@ function renderMonitorPanel({
       <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-[0.78fr_0.94fr_0.64fr_0.64fr]">
         {renderMetricCard({
           label: "活跃周期",
-          value: activeRuns?.length ? activeRuns.map((run) => formatMonitorVariant(run)).join(" / ") : "--",
+          value: activeRuns?.length
+            ? activeRuns.map((run) => formatMonitorVariant(run)).join(" / ")
+            : "--",
           helper: "",
           compact: true,
           valueClassName: "tracking-[0.06em]",
@@ -480,8 +455,12 @@ function renderMonitorPanel({
                       <p className="font-medium text-neutral-950">
                         {formatWindowLabel(summary.eventStart, summary.eventEnd)}
                       </p>
-                      <p className="mt-1 text-xs text-[var(--ink-soft)]">{formatFirstTriggerLine(summary, "up")}</p>
-                      <p className="mt-1 text-xs text-[var(--ink-soft)]">{formatFirstTriggerLine(summary, "down")}</p>
+                      <p className="mt-1 text-xs text-[var(--ink-soft)]">
+                        {formatFirstTriggerLine(summary, "up")}
+                      </p>
+                      <p className="mt-1 text-xs text-[var(--ink-soft)]">
+                        {formatFirstTriggerLine(summary, "down")}
+                      </p>
                       <p className={`mt-1 text-xs ${getSamplingHealthTone(summary)}`}>
                         {formatSamplingHealthLine(summary)}
                       </p>
@@ -511,204 +490,6 @@ function renderMonitorPanel({
       </div>
 
       {renderPagination(currentQuery, "monitorPage", pagination)}
-    </>
-  );
-}
-
-function buildPaperRuleLine(summary) {
-  if (!summary) {
-    return "--";
-  }
-  const sampleSeconds = Number(summary.sampleIntervalMs ?? 0) / 1000;
-  const base = [`采样 ${sampleSeconds || "--"}s`, `每腿 $${Number(summary.usdPerLeg ?? 0).toFixed(2)}`];
-  if (Number.isFinite(Number(summary.referenceLookbackMinutes))) {
-    base.push(`参考前 ${summary.referenceLookbackMinutes} 分钟`);
-  }
-  if (Number.isFinite(Number(summary.firstEntryDeadlineMinutes))) {
-    base.push(`首单截止 ${summary.firstEntryDeadlineMinutes} 分钟`);
-  }
-  if (Number.isFinite(Number(summary.settlementDelayMinutes))) {
-    base.push(`结算延后 ${summary.settlementDelayMinutes} 分钟`);
-  }
-  return base.join(" / ");
-}
-
-function buildPaperExtraLines(row, summary) {
-  const lines = [];
-  if (Number.isFinite(Number(summary?.referenceLookbackMinutes))) {
-    lines.push(`参考样本 ${formatCount(row.eventsWithReference)}`);
-    lines.push(`同向 ${formatCount(row.sameAsReferenceEvents)}`);
-  }
-  if (Number.isFinite(Number(row?.deadlineMissEvents))) {
-    lines.push(`超时未触发 ${formatCount(row.deadlineMissEvents)}`);
-  }
-  return lines;
-}
-
-function renderPaperPanel({ currentQuery, selectedMonitorVariant, paperSummary }) {
-  const summary = paperSummary?.summary;
-  const rows = Array.isArray(paperSummary?.rows) ? paperSummary.rows : [];
-  const best = paperSummary?.bestStrategy;
-  const worst = paperSummary?.worstStrategy;
-
-  return (
-    <>
-      {renderPanelHeader(
-        "Paper strategies",
-        `${paperSummary?.timeframeLabel ?? "纸面下单"}收益`,
-        "这里展示独立纸面脚本的滚动累计结果。每组都是模拟下单加自动结算，不会触发真实买单。",
-      )}
-
-      {renderTabBar(currentQuery, selectedMonitorVariant)}
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {renderMetricCard({
-          label: "滚动会话",
-          value: summary?.sessionLabel ?? paperSummary?.session?.sessionLabel ?? "--",
-          helper: summary?.startedAt ? `启动于 ${formatDateTime(summary.startedAt)}` : "暂无纸面会话",
-          compact: true,
-        })}
-        {renderMetricCard({
-          label: "已统计窗口",
-          value: formatCount(summary?.eventsTracked),
-          helper: buildPaperRuleLine(summary),
-          compact: true,
-        })}
-        {renderMetricCard({
-          label: "当前最佳",
-          value: best?.label ?? "--",
-          helper: best ? `净收益 ${formatMoney(best.totalNetPnlUsd)}` : "暂无收益排行",
-          tone: best && Number(best.totalNetPnlUsd ?? 0) >= 0 ? "up" : "neutral",
-          compact: true,
-        })}
-        {renderMetricCard({
-          label: "当前最差",
-          value: worst?.label ?? "--",
-          helper: worst ? `净收益 ${formatMoney(worst.totalNetPnlUsd)}` : "暂无收益排行",
-          tone: worst && Number(worst.totalNetPnlUsd ?? 0) < 0 ? "down" : "neutral",
-          compact: true,
-        })}
-      </div>
-
-      {summary?.updatedAt ? (
-        <p className="mt-4 text-sm text-[var(--ink-soft)]">
-          最近更新：{formatDateTime(summary.updatedAt)}
-          {paperSummary?.filePath ? ` / ${paperSummary.filePath}` : ""}
-        </p>
-      ) : null}
-
-      <div className="mt-8 overflow-x-auto rounded-[1.5rem] border border-[var(--line)] bg-white/72">
-        <table className="min-w-full text-sm">
-          <thead className="text-left text-[var(--ink-soft)]">
-            <tr>
-              <th className="px-5 pb-4 pt-5 font-medium">排名</th>
-              <th className="px-4 pb-4 pt-5 font-medium">组合</th>
-              <th className="px-4 pb-4 pt-5 font-medium">规则</th>
-              <th className="px-4 pb-4 pt-5 font-medium">窗口</th>
-              <th className="px-4 pb-4 pt-5 font-medium">结果分布</th>
-              <th className="px-4 pb-4 pt-5 font-medium">胜负</th>
-              <th className="px-4 pb-4 pt-5 font-medium">投入</th>
-              <th className="px-4 pb-4 pt-5 font-medium">回收</th>
-              <th className="px-4 pb-4 pt-5 font-medium">净收益</th>
-              <th className="px-5 pb-4 pt-5 font-medium">附加</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length ? (
-              rows.map((row, index) => {
-                const rank = row.rank ?? index + 1;
-                const netPnl = Number(row.totalNetPnlUsd ?? 0);
-                return (
-                  <tr key={`${row.id}-${rank}`} className="border-t border-[var(--line)]">
-                    <td className="px-5 py-4 font-semibold text-neutral-950">#{rank}</td>
-                    <td className="px-4 py-4 font-semibold text-neutral-950">{row.label}</td>
-                    <td className="px-4 py-4 text-[var(--ink-soft)]">
-                      首单 &lt;= {row.firstEntryCents}c
-                      <br />
-                      对冲 &lt;= {row.hedgeEntryCents}c
-                    </td>
-                    <td className="px-4 py-4 text-[var(--ink-soft)]">
-                      {formatCount(row.eventsSeen)} / {formatCount(row.resolvedEvents)}
-                    </td>
-                    <td className="px-4 py-4 text-[var(--ink-soft)]">
-                      无交易 {formatCount(row.noTradeEvents)}
-                      <br />
-                      单腿 {formatCount(row.firstOnlyEvents)} / 双腿 {formatCount(row.pairedEvents)}
-                    </td>
-                    <td className="px-4 py-4 text-[var(--ink-soft)]">
-                      赢 {formatCount(row.winningEvents)} / 亏 {formatCount(row.losingEvents)}
-                      {formatCount(row.flatEvents) ? <><br />平 {formatCount(row.flatEvents)}</> : null}
-                    </td>
-                    <td className="px-4 py-4">{formatMoney(row.totalSpentUsd)}</td>
-                    <td className="px-4 py-4">{formatMoney(row.totalPayoutUsd)}</td>
-                    <td
-                      className={
-                        netPnl >= 0
-                          ? "px-4 py-4 font-semibold text-[var(--signal-up)]"
-                          : "px-4 py-4 font-semibold text-[var(--signal-down)]"
-                      }
-                    >
-                      {formatMoney(row.totalNetPnlUsd)}
-                      <br />
-                      <span className="text-xs font-normal text-[var(--ink-soft)]">
-                        均值 {formatMoney(row.avgNetPnlUsd)}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4 text-[var(--ink-soft)]">
-                      {buildPaperExtraLines(row, summary).length ? (
-                        buildPaperExtraLines(row, summary).map((line, lineIndex, lines) => (
-                          <span key={`${row.id}-extra-${lineIndex}`}>
-                            {line}
-                            {lineIndex < lines.length - 1 ? <br /> : null}
-                          </span>
-                        ))
-                      ) : (
-                        "--"
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td className="px-5 py-8 text-[var(--ink-soft)]" colSpan={10}>
-                  当前还没有纸面收益汇总。
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-export function MonitorSectionPanel({
-  currentQuery,
-  filters,
-  pagination,
-  summaries,
-  activeRun,
-  activeRuns,
-  thresholdAggregate,
-  selectedMonitorVariant,
-  summaryMode = "monitor",
-  paperSummary = null,
-}) {
-  return (
-    <section className="rounded-[2rem] border border-[var(--line)] bg-[var(--panel-strong)] p-6 shadow-[var(--shadow)]">
-      {summaryMode === "paper"
-        ? renderPaperPanel({ currentQuery, selectedMonitorVariant, paperSummary })
-        : renderMonitorPanel({
-            currentQuery,
-            filters,
-            pagination,
-            summaries,
-            activeRun,
-            activeRuns,
-            thresholdAggregate,
-            selectedMonitorVariant,
-          })}
     </section>
   );
 }

@@ -17,6 +17,8 @@ from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import (
     BalanceAllowanceParams,
     MarketOrderArgs,
+    OpenOrderParams,
+    OrderArgs,
     OrderType,
     PartialCreateOrderOptions,
 )
@@ -110,7 +112,9 @@ def get_first_env(keys, fallback=""):
 
 
 def get_variant_scope() -> str:
-    return {"1h": "1H", "4h": "4H", "5m": "5M"}.get(ORDER_VARIANT, ORDER_VARIANT.upper())
+    return {"15m": "15M", "1h": "1H", "4h": "4H", "5m": "5M"}.get(
+        ORDER_VARIANT, ORDER_VARIANT.upper()
+    )
 
 
 def get_variant_setting(name: str, default, allow_global_for_1h: bool = True) -> str:
@@ -158,6 +162,31 @@ CLOB_BASE = get_first_env(
 )
 ORDER_VARIANT = get_first_env(["ORDER_VARIANT"], "1h").strip().lower()
 ORDER_VARIANT_DEFAULTS = {
+    "15m": {
+        "eventPrefix": "btc-updown-15m-",
+        "eventSuffix": "",
+        "slugMode": "timestamp-start",
+        "windowMinutes": 15,
+        "sampleIntervalMs": 5000,
+        "minOrderIntervalMs": 0,
+        "attemptCooldownMs": 15000,
+        "signalMinDurationMinutes": 7.5,
+        "minFirstEntryMinutesRemaining": 7.5,
+        "minHedgeEntryMinutesRemaining": 0,
+        "minStartupMinutesRemaining": 0,
+        "firstEntryCents": 38,
+        "hedgeEntryCents": 38,
+        "baseUsd": 1,
+        "escalatedUsd": 1,
+        "riskPauseEnabled": False,
+        "riskWindowHours": 12,
+        "riskMaxLossUsd": 10,
+        "riskPauseHours": 8,
+        "strategyMode": "trigger-fok",
+        "limitOrderPriceCents": 38,
+        "limitOrderShares": 5,
+        "limitOrderCancelAfterMinutes": 7.5,
+    },
     "1h": {
         "eventPrefix": "bitcoin-up-or-down-",
         "eventSuffix": "-et",
@@ -168,15 +197,20 @@ ORDER_VARIANT_DEFAULTS = {
         "attemptCooldownMs": 15000,
         "signalMinDurationMinutes": 50,
         "minFirstEntryMinutesRemaining": 30,
+        "minHedgeEntryMinutesRemaining": 0,
         "minStartupMinutesRemaining": 0,
         "firstEntryCents": 38,
         "hedgeEntryCents": 38,
         "baseUsd": 1,
-        "escalatedUsd": 2,
+        "escalatedUsd": 1,
         "riskPauseEnabled": False,
         "riskWindowHours": 12,
         "riskMaxLossUsd": 10,
         "riskPauseHours": 8,
+        "strategyMode": "trigger-fok",
+        "limitOrderPriceCents": 38,
+        "limitOrderShares": 5,
+        "limitOrderCancelAfterMinutes": 30,
     },
     "4h": {
         "eventPrefix": "btc-updown-4h-",
@@ -188,15 +222,20 @@ ORDER_VARIANT_DEFAULTS = {
         "attemptCooldownMs": 15000,
         "signalMinDurationMinutes": 210,
         "minFirstEntryMinutesRemaining": 60,
+        "minHedgeEntryMinutesRemaining": 0,
         "minStartupMinutesRemaining": 0,
-        "firstEntryCents": 35,
-        "hedgeEntryCents": 35,
+        "firstEntryCents": 30,
+        "hedgeEntryCents": 50,
         "baseUsd": 1,
         "escalatedUsd": 1,
         "riskPauseEnabled": False,
         "riskWindowHours": 12,
         "riskMaxLossUsd": 10,
         "riskPauseHours": 8,
+        "strategyMode": "trigger-fok",
+        "limitOrderPriceCents": 30,
+        "limitOrderShares": 5,
+        "limitOrderCancelAfterMinutes": 60,
     },
     "5m": {
         "eventPrefix": "btc-updown-5m-",
@@ -208,6 +247,7 @@ ORDER_VARIANT_DEFAULTS = {
         "attemptCooldownMs": 4000,
         "signalMinDurationMinutes": 4.5,
         "minFirstEntryMinutesRemaining": 1.5,
+        "minHedgeEntryMinutesRemaining": 0,
         "minStartupMinutesRemaining": 4.5,
         "firstEntryCents": 30,
         "hedgeEntryCents": 50,
@@ -217,6 +257,10 @@ ORDER_VARIANT_DEFAULTS = {
         "riskWindowHours": 12,
         "riskMaxLossUsd": 10,
         "riskPauseHours": 8,
+        "strategyMode": "trigger-fok",
+        "limitOrderPriceCents": 30,
+        "limitOrderShares": 5,
+        "limitOrderCancelAfterMinutes": 1.5,
     },
 }
 ORDER_VARIANT_CONFIG = ORDER_VARIANT_DEFAULTS.get(ORDER_VARIANT, ORDER_VARIANT_DEFAULTS["1h"])
@@ -273,6 +317,12 @@ ORDER_MIN_FIRST_ENTRY_MINUTES_REMAINING = float(
         str(ORDER_VARIANT_CONFIG["minFirstEntryMinutesRemaining"]),
     )
 )
+ORDER_MIN_HEDGE_ENTRY_MINUTES_REMAINING = float(
+    get_variant_setting(
+        "MIN_HEDGE_ENTRY_MINUTES_REMAINING",
+        str(ORDER_VARIANT_CONFIG["minHedgeEntryMinutesRemaining"]),
+    )
+)
 ORDER_MIN_STARTUP_MINUTES_REMAINING = float(
     get_variant_setting(
         "MIN_STARTUP_MINUTES_REMAINING",
@@ -282,6 +332,26 @@ ORDER_MIN_STARTUP_MINUTES_REMAINING = float(
 ORDER_BASE_USD = float(get_variant_setting("BASE_USD", ORDER_VARIANT_CONFIG["baseUsd"]))
 ORDER_ESCALATED_USD = float(
     get_variant_setting("ESCALATED_USD", ORDER_VARIANT_CONFIG["escalatedUsd"])
+)
+ORDER_STRATEGY_MODE = get_variant_setting("STRATEGY_MODE", ORDER_VARIANT_CONFIG["strategyMode"]).strip().lower()
+ORDER_LIMIT_ORDER_PRICE_CENTS = float(
+    get_variant_setting("LIMIT_ORDER_PRICE_CENTS", ORDER_VARIANT_CONFIG["limitOrderPriceCents"])
+)
+ORDER_LIMIT_ORDER_SHARES = float(
+    get_variant_setting("LIMIT_ORDER_SHARES", ORDER_VARIANT_CONFIG["limitOrderShares"])
+)
+ORDER_LIMIT_ORDER_CANCEL_AFTER_MINUTES = float(
+    get_variant_setting(
+        "LIMIT_ORDER_CANCEL_AFTER_MINUTES",
+        ORDER_VARIANT_CONFIG["limitOrderCancelAfterMinutes"],
+    )
+)
+ORDER_LOW_BALANCE_PAPER_THRESHOLD_USD = float(
+    get_first_env(["ORDER_LOW_BALANCE_PAPER_THRESHOLD_USD"], "4")
+)
+ORDER_TRADING_ENABLED = parse_bool(
+    get_variant_setting("TRADING_ENABLED", "true", False),
+    True,
 )
 ORDER_MIN_BALANCE_USD = float(get_first_env(["ORDER_MIN_BALANCE_USD"], "2"))
 ORDER_MAX_SAMPLES = int(get_first_env(["ORDER_MAX_SAMPLES"], "0"))
@@ -1570,6 +1640,16 @@ def create_order_record(side: str):
         "confirmationStartedAt": None,
         "confirmationBaselineSize": None,
         "confirmationLastCheckedAt": None,
+        "restingPosted": False,
+        "restingPostedAt": None,
+        "restingOrderId": None,
+        "restingPriceCents": None,
+        "restingShares": None,
+        "restingBaselineSize": None,
+        "restingLastCheckedAt": None,
+        "restingCanceledAt": None,
+        "restingCancelResponse": None,
+        "restingMissingAt": None,
     }
 
 
@@ -1603,6 +1683,20 @@ def build_carry_plan(next_order_usd: float, source: str, reason: str, reference=
 
 
 def create_hour_state(meta, carry_plan):
+    order_usd = carry_plan["nextOrderUsd"]
+    resting_cancel_at = None
+    if uses_resting_limit_strategy():
+        order_usd = estimate_limit_order_cost_usd(
+            ORDER_LIMIT_ORDER_PRICE_CENTS,
+            ORDER_LIMIT_ORDER_SHARES,
+        )
+        event_start = meta.get("eventStart")
+        event_end = meta.get("eventEnd")
+        if event_start is not None:
+            cancel_at = event_start + timedelta(minutes=ORDER_LIMIT_ORDER_CANCEL_AFTER_MINUTES)
+            if event_end is not None and cancel_at > event_end:
+                cancel_at = event_end
+            resting_cancel_at = cancel_at.isoformat()
     return {
         "version": 1,
         "mode": "dry-run" if ORDER_DRY_RUN else "live",
@@ -1615,7 +1709,7 @@ def create_hour_state(meta, carry_plan):
         "eventStart": meta["eventStart"].isoformat() if meta.get("eventStart") else None,
         "eventEnd": meta["eventEnd"].isoformat() if meta.get("eventEnd") else None,
         "runStartedAt": datetime.now(UTC).isoformat(),
-        "orderUsd": carry_plan["nextOrderUsd"],
+        "orderUsd": order_usd,
         "carryPlan": carry_plan,
         "priceSource": f"clob-{ORDER_PRICE_SIDE.lower()}",
         "tickSize": meta.get("tickSize"),
@@ -1652,6 +1746,14 @@ def create_hour_state(meta, carry_plan):
         "carrySignalQualified": False,
         "bothSidesLe40": False,
         "nextOrderUsd": None,
+        "entryStrategyMode": ORDER_STRATEGY_MODE,
+        "lowBalancePaper": False,
+        "lowBalancePaperActivatedAt": None,
+        "lowBalancePaperReason": None,
+        "lowBalancePaperBalanceUsd": None,
+        "restingLimitInitializedAt": None,
+        "restingLimitCancelAt": resting_cancel_at,
+        "restingLimitCanceledAt": None,
     }
 
 
@@ -1723,6 +1825,227 @@ def clear_order_submission(order_record: Dict[str, Any]) -> None:
     order_record["submissionStartedAt"] = None
     order_record["submissionBaselineSize"] = None
     order_record["submissionLastCheckedAt"] = None
+
+
+def uses_resting_limit_strategy(state: Optional[Dict[str, Any]] = None) -> bool:
+    variant = str((state or {}).get("variant") or ORDER_VARIANT).lower()
+    if isinstance(state, dict) and ("entryStrategyMode" in state):
+        mode = str(state.get("entryStrategyMode") or "trigger-fok").lower()
+    elif isinstance(state, dict) and (state.get("hourKey") or state.get("slug")):
+        mode = "trigger-fok"
+    else:
+        mode = ORDER_STRATEGY_MODE
+    return variant == "1h" and mode == "resting-limit"
+
+
+def uses_low_balance_paper_mode(state: Optional[Dict[str, Any]] = None) -> bool:
+    return bool(isinstance(state, dict) and state.get("lowBalancePaper"))
+
+
+def activate_low_balance_paper_mode(
+    state: Dict[str, Any],
+    balance_usd: float,
+    required_balance_usd: float,
+    now: datetime,
+) -> None:
+    if state.get("lowBalancePaper"):
+        return
+    state["mode"] = "paper-low-balance"
+    state["lowBalancePaper"] = True
+    state["lowBalancePaperActivatedAt"] = now.isoformat()
+    state["lowBalancePaperReason"] = "balance-below-threshold"
+    state["lowBalancePaperBalanceUsd"] = round(float(balance_usd), 6)
+    for side in ("up", "down"):
+        order_record = (state.get("orders") or {}).get(side)
+        if isinstance(order_record, dict):
+            order_record["mode"] = "paper-low-balance"
+    write_hour_log(
+        state,
+        "low-balance-paper-enabled",
+        {
+            "balanceUsd": round(float(balance_usd), 6),
+            "thresholdUsd": round(float(required_balance_usd), 6),
+        },
+    )
+    log(
+        f"Balance ${balance_usd:.6f} is below ${required_balance_usd:.6f}; "
+        f"switching {state['slug']} to paper-low-balance mode."
+    )
+
+
+def build_low_balance_limit_response(
+    order_record: Dict[str, Any],
+    price_cents: float,
+    shares: float,
+) -> Dict[str, Any]:
+    cost_usd = estimate_limit_order_cost_usd(price_cents, shares)
+    return {
+        "success": True,
+        "dryRun": True,
+        "lowBalancePaper": True,
+        "status": "simulated-matched",
+        "makingAmount": round(cost_usd, 6),
+        "takingAmount": round(float(shares), 6),
+        "priceCents": round(float(price_cents), 3),
+        "orderId": order_record.get("restingOrderId") or order_record.get("orderId"),
+    }
+
+
+def estimate_limit_order_cost_usd(price_cents: float, shares: float) -> float:
+    return round((float(price_cents) / 100.0) * float(shares), 6)
+
+
+def get_resting_limit_cancel_at(state: Dict[str, Any]) -> Optional[datetime]:
+    event_start = parse_date(state.get("eventStart"))
+    if event_start is None:
+        return None
+    cancel_at = event_start + timedelta(minutes=ORDER_LIMIT_ORDER_CANCEL_AFTER_MINUTES)
+    event_end = parse_date(state.get("eventEnd"))
+    if event_end is not None and cancel_at > event_end:
+        return event_end
+    return cancel_at
+
+
+def extract_open_order_id(row: Any) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    for key in ("id", "orderID", "orderId"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def extract_open_order_ids(rows: Any) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(rows, list):
+        return ids
+    for row in rows:
+        order_id = extract_open_order_id(row)
+        if order_id:
+            ids.add(order_id)
+    return ids
+
+
+def normalize_resting_order_status(detail: Any) -> str:
+    if not isinstance(detail, dict):
+        return ""
+    return str(detail.get("status") or "").strip().upper()
+
+
+def is_resting_order_active_status(status: str) -> bool:
+    return status in {"LIVE", "OPEN", "DELAYED", "UNMATCHED"}
+
+
+def build_resting_fill_response(
+    order_record: Dict[str, Any],
+    current_size: float,
+    matched_shares: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    baseline_size = parse_float(order_record.get("restingBaselineSize"), 0.0) or 0.0
+    observed_delta = round(float(current_size) - float(baseline_size), 6)
+    matched_delta = round(parse_float(matched_shares, 0.0) or 0.0, 6)
+    delta_shares = max(observed_delta, matched_delta)
+    if delta_shares <= 1e-6:
+        return None
+    price_cents = parse_float(order_record.get("restingPriceCents"))
+    if price_cents is None:
+        price_cents = parse_float(order_record.get("thresholdCents"), 0.0) or 0.0
+    estimated_cost = estimate_limit_order_cost_usd(price_cents, delta_shares)
+    return {
+        "restingFilled": True,
+        "orderID": order_record.get("restingOrderId") or order_record.get("orderId"),
+        "takingAmount": round(delta_shares, 6),
+        "makingAmount": round(estimated_cost, 6),
+        "status": "matched",
+        "transactionsHashes": [],
+    }
+
+
+def mark_resting_fill_detected(
+    state: Dict[str, Any],
+    side: str,
+    current_size: float,
+    now: datetime,
+    matched_shares: Optional[float] = None,
+) -> bool:
+    order_record = (state.get("orders") or {}).get(side)
+    if not isinstance(order_record, dict):
+        return False
+    response = build_resting_fill_response(order_record, current_size, matched_shares)
+    if response is None:
+        return False
+    was_placed = bool(order_record.get("placed"))
+    order_record["placed"] = True
+    order_record["attemptBlocked"] = True
+    order_record["requestedAt"] = order_record.get("requestedAt") or order_record.get("restingPostedAt") or now.isoformat()
+    order_record["response"] = response
+    order_record["orderId"] = order_record.get("restingOrderId") or order_record.get("orderId")
+    order_record["status"] = "matched"
+    order_record["amountUsd"] = parse_float(response.get("makingAmount"), order_record.get("amountUsd"))
+    order_record["error"] = None
+    order_record["lastFailureKind"] = None
+    order_record["lastFailureAt"] = None
+    order_record["restingLastCheckedAt"] = now.isoformat()
+    if not state.get("firstEntrySide"):
+        mark_first_entry_side(state, order_record, now)
+    paired_now = mark_pair_complete_if_ready(state, now)
+    if not was_placed:
+        write_hour_log(
+            state,
+            "order-placed",
+            {
+                "side": side,
+                "triggerType": order_record.get("triggerType"),
+                "thresholdCents": order_record.get("thresholdCents"),
+                "observedCents": order_record.get("observedCents"),
+                "amountUsd": order_record.get("amountUsd"),
+                "response": response,
+            },
+        )
+        log(
+            f"Filled resting {side.upper()} order for {state['slug']} "
+            f"at {order_record.get('thresholdCents')}c ({response.get('takingAmount')} shares)"
+        )
+    return paired_now
+
+
+def apply_resting_terminal_status(
+    state: Dict[str, Any],
+    side: str,
+    status: str,
+    detail: Optional[Dict[str, Any]],
+    now: datetime,
+) -> None:
+    order_record = (state.get("orders") or {}).get(side)
+    if not isinstance(order_record, dict):
+        return
+    status_upper = str(status or "").upper()
+    kind_map = {
+        "INVALID": "resting-invalid",
+        "CANCELED": "resting-canceled",
+        "CANCELLED": "resting-canceled",
+        "EXPIRED": "resting-expired",
+        "UNMATCHED": "resting-unmatched",
+    }
+    failure_kind = kind_map.get(status_upper, "resting-closed-unfilled")
+    order_record["restingMissingAt"] = now.isoformat()
+    order_record["restingCanceledAt"] = now.isoformat()
+    order_record["restingCancelResponse"] = detail
+    order_record["status"] = status_upper.lower() if status_upper else "closed-unfilled"
+    order_record["error"] = failure_kind
+    order_record["lastFailureKind"] = failure_kind
+    order_record["lastFailureAt"] = now.isoformat()
+    write_hour_log(
+        state,
+        "resting-order-closed",
+        {
+            "side": side,
+            "status": status_upper,
+            "orderId": order_record.get("restingOrderId"),
+            "detail": detail,
+        },
+    )
 
 
 def build_order_submission_key(state, side: str) -> str:
@@ -2003,6 +2326,8 @@ def detect_variant_from_slug(slug: Optional[str]) -> str:
     text = str(slug or "").lower()
     if text.startswith("btc-updown-4h-"):
         return "4h"
+    if text.startswith("btc-updown-15m-"):
+        return "15m"
     if text.startswith("btc-updown-5m-"):
         return "5m"
     return "1h"
@@ -2553,6 +2878,24 @@ def finalize_state(state, reason: str) -> None:
 def summarize_state(state) -> str:
     if state["orders"]["up"]["placed"] and state["orders"]["down"]["placed"]:
         status = "paired"
+    elif uses_resting_limit_strategy(state):
+        open_resting_sides = [
+            side
+            for side in ("up", "down")
+            if state["orders"][side].get("restingPosted")
+            and not state["orders"][side].get("placed")
+            and not state["orders"][side].get("restingCanceledAt")
+        ]
+        if len(open_resting_sides) == 2:
+            status = "resting:both"
+        elif len(open_resting_sides) == 1:
+            status = f"resting:{open_resting_sides[0]}"
+        elif state.get("restingLimitCanceledAt"):
+            status = "resting-canceled"
+        elif state["firstEntrySide"]:
+            status = f"first:{state['firstEntrySide']}"
+        else:
+            status = "waiting"
     elif state["orders"]["up"].get("submissionPending"):
         status = "submitting:up"
     elif state["orders"]["down"].get("submissionPending"):
@@ -2634,6 +2977,16 @@ def snapshot_balance_usd(snapshot) -> float:
         return 0.0
 
 
+def snapshot_allowance_usd(snapshot):
+    try:
+        raw_value = snapshot.get("allowance")
+        if raw_value in (None, "", "null"):
+            return None
+        return int(raw_value) / 10**6
+    except Exception:
+        return None
+
+
 def create_trader():
     if ORDER_DRY_RUN:
         log("Order engine is running in dry-run mode")
@@ -2646,8 +2999,14 @@ def create_trader():
             def initialize(self):
                 return None
 
+            def get_balance_status(self):
+                return {"snapshot": None, "balance": float("inf"), "allowance": None}
+
             def ensure_funds(self, required_usd: float):
                 return {"requiredUsd": required_usd, "mode": "dry-run"}
+
+            def estimate_buy_price(self, token_id: str, amount_usd: float):
+                return None
 
             def place_buy(self, token_id: str, amount_usd: float, price_cap: float, tick_size, neg_risk):
                 return {
@@ -2673,6 +3032,40 @@ def create_trader():
 
             def get_position_size(self, token_id: str) -> float:
                 return 0.0
+
+            def place_limit_buy(
+                self,
+                token_id: str,
+                shares: float,
+                price_cents: float,
+                tick_size,
+                neg_risk,
+                expiration_ts: Optional[int] = None,
+            ):
+                return {
+                    "success": True,
+                    "dryRun": True,
+                    "status": "live",
+                    "orderID": f"dry-limit-{int(time.time() * 1000)}",
+                    "tokenId": token_id,
+                    "shares": shares,
+                    "priceCents": price_cents,
+                    "expiration": expiration_ts,
+                }
+
+            def get_open_orders(self, market_id: Optional[str] = None, asset_id: Optional[str] = None):
+                return []
+
+            def get_order_detail(self, order_id: str):
+                return {
+                    "id": order_id,
+                    "status": "LIVE",
+                    "size_matched": "0",
+                    "original_size": str(ORDER_LIMIT_ORDER_SHARES),
+                }
+
+            def cancel_orders(self, order_ids):
+                return {"canceled": order_ids or [], "dryRun": True}
 
         return DryRunTrader()
 
@@ -2725,6 +3118,14 @@ def create_trader():
                 f"(signatureType={self.signature_type}, funder={self.funder})"
             )
 
+        def get_balance_status(self):
+            snapshot = self._get_balance_snapshot()
+            return {
+                "snapshot": snapshot,
+                "balance": snapshot_balance_usd(snapshot),
+                "allowance": snapshot_allowance_usd(snapshot),
+            }
+
         def _get_balance_snapshot(self):
             if self._first_snapshot is not None:
                 snapshot = self._first_snapshot
@@ -2737,14 +3138,9 @@ def create_trader():
             )
 
         def ensure_funds(self, required_usd: float):
-            snapshot = self._get_balance_snapshot()
-            balance = int(snapshot.get("balance") or 0) / 10**6
-            allowance_raw = snapshot.get("allowance")
-            allowance = (
-                int(allowance_raw) / 10**6
-                if allowance_raw not in (None, "", "null")
-                else None
-            )
+            status = self.get_balance_status()
+            balance = status["balance"]
+            allowance = status["allowance"]
             if balance < ORDER_MIN_BALANCE_USD:
                 raise RuntimeError(
                     f"Collateral balance {balance:.6f} is below minimum ${ORDER_MIN_BALANCE_USD}. Order skipped."
@@ -2765,6 +3161,10 @@ def create_trader():
                 return {"balance": balance, "allowance": allowance, "autoApproved": False}
             raise RuntimeError("ORDER_AUTO_APPROVE is not implemented for the Python path yet.")
 
+        def estimate_buy_price(self, token_id: str, amount_usd: float):
+            order_type = OrderType.FAK if ORDER_EXECUTION_TYPE == "FAK" else OrderType.FOK
+            return float(self.client.calculate_market_price(token_id, BUY, float(amount_usd), order_type))
+
         def place_buy(self, token_id: str, amount_usd: float, price_cap: float, tick_size, neg_risk):
             order_type = OrderType.FAK if ORDER_EXECUTION_TYPE == "FAK" else OrderType.FOK
             order = self.client.create_market_order(
@@ -2772,7 +3172,7 @@ def create_trader():
                     token_id=token_id,
                     amount=amount_usd,
                     side=BUY,
-                    price=price_cap,
+                    price=float(price_cap or 0.0),
                     order_type=order_type,
                 ),
                 PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk),
@@ -2795,6 +3195,44 @@ def create_trader():
 
         def get_position_size(self, token_id: str) -> float:
             return fetch_position_size(self.funder, token_id)
+
+        def place_limit_buy(
+            self,
+            token_id: str,
+            shares: float,
+            price_cents: float,
+            tick_size,
+            neg_risk,
+            expiration_ts: Optional[int] = None,
+        ):
+            order = self.client.create_order(
+                OrderArgs(
+                    token_id=token_id,
+                    price=round(float(price_cents) / 100.0, 4),
+                    size=float(shares),
+                    side=BUY,
+                    expiration=int(expiration_ts or 0),
+                ),
+                PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk),
+            )
+            order_type = OrderType.GTD if expiration_ts else OrderType.GTC
+            return self.client.post_order(order, order_type)
+
+        def get_open_orders(
+            self,
+            market_id: Optional[str] = None,
+            asset_id: Optional[str] = None,
+        ):
+            params = OpenOrderParams(market=market_id, asset_id=asset_id)
+            return self.client.get_orders(params)
+
+        def get_order_detail(self, order_id: str):
+            return self.client.get_order(order_id)
+
+        def cancel_orders(self, order_ids):
+            if not order_ids:
+                return {"canceled": []}
+            return self.client.cancel_orders(order_ids)
 
     return LiveTrader(selected_client, selected_snapshot)
 
@@ -2826,6 +3264,23 @@ def start_event(target: datetime):
                 and parse_date(runtime_state.get("eventEnd")) is not None
                 and parse_date(runtime_state.get("eventEnd")) > datetime.now(UTC)
             ):
+                runtime_mode = str(runtime_state.get("entryStrategyMode") or "trigger-fok").lower()
+                if runtime_mode != ORDER_STRATEGY_MODE and not has_placed_orders(runtime_state):
+                    clear_runtime_state()
+                    log(
+                        f"Discarded resumed {ORDER_VARIANT.upper()} state for {runtime_state['slug']} "
+                        f"because mode={runtime_mode} no longer matches configured mode={ORDER_STRATEGY_MODE}"
+                    )
+                    runtime_state = None
+                elif runtime_mode != ORDER_STRATEGY_MODE:
+                    runtime_state["entryStrategyMode"] = runtime_mode
+                    log(
+                        f"Keeping resumed {ORDER_VARIANT.upper()} state for {runtime_state['slug']} "
+                        f"because mode={runtime_mode} differs from configured mode={ORDER_STRATEGY_MODE} "
+                        f"but orders were already placed"
+                    )
+                if runtime_state is None:
+                    continue
                 if (
                     ORDER_MIN_STARTUP_MINUTES_REMAINING > 0
                     and not has_placed_orders(runtime_state)
@@ -3363,6 +3818,81 @@ def place_side_order(state, trader, side: str, threshold_cents: float, trigger_t
         return False
     if is_order_submit_throttled(state, now):
         return False
+    if uses_low_balance_paper_mode(state):
+        response = {
+            "success": True,
+            "dryRun": True,
+            "lowBalancePaper": True,
+            "status": "simulated",
+            "orderID": f"paper-{side}-{int(now.timestamp() * 1000)}",
+            "makingAmount": round(float(state["orderUsd"]), 6),
+            "takingAmount": round(float(state["orderUsd"]) / (float(threshold_cents) / 100.0), 6),
+            "priceCap": round(threshold_cents / 100, 4),
+            "tokenId": state["tokens"][side],
+        }
+        order_record["attemptCount"] += 1
+        order_record["lastAttemptAt"] = now.isoformat()
+        order_record["amountUsd"] = state["orderUsd"]
+        order_record["triggerType"] = trigger_type
+        order_record["thresholdCents"] = threshold_cents
+        order_record["priceCap"] = round(threshold_cents / 100, 4)
+        order_record["observedCents"] = observed_cents
+        order_record["placed"] = True
+        order_record["attemptBlocked"] = True
+        order_record["requestedAt"] = now.isoformat()
+        order_record["response"] = response
+        order_record["orderId"] = response.get("orderID")
+        order_record["status"] = "simulated"
+        order_record["mode"] = state.get("mode")
+        order_record["error"] = None
+        order_record["lastFailureKind"] = None
+        order_record["lastFailureAt"] = None
+        state["lastOrderAttemptAt"] = now.isoformat()
+        write_hour_log(
+            state,
+            "order-placed",
+            {
+                "side": side,
+                "triggerType": trigger_type,
+                "thresholdCents": threshold_cents,
+                "observedCents": observed_cents,
+                "amountUsd": state["orderUsd"],
+                "response": response,
+            },
+        )
+        save_runtime_state(state)
+        log(
+            f"[PAPER-LOW-BALANCE] Bought {side.upper()} ${state['orderUsd']} "
+            f"at <= {threshold_cents}c for {state['slug']}"
+        )
+        return True
+    if not ORDER_TRADING_ENABLED:
+        order_record["attemptBlocked"] = True
+        order_record["triggerType"] = trigger_type
+        order_record["thresholdCents"] = threshold_cents
+        order_record["observedCents"] = observed_cents
+        order_record["amountUsd"] = state["orderUsd"]
+        order_record["error"] = "trading-disabled"
+        order_record["lastFailureKind"] = "disabled"
+        order_record["lastFailureAt"] = now.isoformat()
+        write_hour_log(
+            state,
+            "order-disabled",
+            {
+                "side": side,
+                "triggerType": trigger_type,
+                "thresholdCents": threshold_cents,
+                "observedCents": observed_cents,
+                "amountUsd": state["orderUsd"],
+                "reason": "trading-disabled",
+            },
+        )
+        save_runtime_state(state)
+        log(
+            f"Skipped {ORDER_VARIANT.upper()} {side.upper()} order for {state['slug']} "
+            "because trading is disabled."
+        )
+        return False
 
     pre_attempt_size = None
     if not ORDER_DRY_RUN:
@@ -3576,11 +4106,345 @@ def place_side_order(state, trader, side: str, threshold_cents: float, trigger_t
     return False
 
 
+def place_resting_limit_orders(state: Dict[str, Any], trader, now: datetime) -> Optional[str]:
+    if state.get("restingLimitInitializedAt"):
+        return None
+    cancel_at = get_resting_limit_cancel_at(state)
+    if cancel_at is not None and now >= cancel_at:
+        state["restingLimitInitializedAt"] = now.isoformat()
+        state["restingLimitCanceledAt"] = now.isoformat()
+        save_runtime_state(state)
+        log(f"Skipped resting-limit init for {state['slug']} because the 30m window already passed")
+        return None
+    estimated_cost_per_side = estimate_limit_order_cost_usd(
+        ORDER_LIMIT_ORDER_PRICE_CENTS,
+        ORDER_LIMIT_ORDER_SHARES,
+    )
+    if not ORDER_TRADING_ENABLED:
+        state["restingLimitInitializedAt"] = now.isoformat()
+        for side in ("up", "down"):
+            order_record = state["orders"][side]
+            order_record["triggerType"] = "resting-limit"
+            order_record["thresholdCents"] = ORDER_LIMIT_ORDER_PRICE_CENTS
+            order_record["amountUsd"] = estimated_cost_per_side
+            order_record["restingPriceCents"] = ORDER_LIMIT_ORDER_PRICE_CENTS
+            order_record["restingShares"] = ORDER_LIMIT_ORDER_SHARES
+            order_record["attemptBlocked"] = True
+            order_record["error"] = "trading-disabled"
+            order_record["lastFailureKind"] = "disabled"
+            order_record["lastFailureAt"] = now.isoformat()
+        write_hour_log(
+            state,
+            "resting-orders-disabled",
+            {
+                "priceCents": ORDER_LIMIT_ORDER_PRICE_CENTS,
+                "shares": ORDER_LIMIT_ORDER_SHARES,
+                "cancelAt": cancel_at.isoformat() if cancel_at else None,
+            },
+        )
+        save_runtime_state(state)
+        log(f"Skipped resting-limit setup for {state['slug']} because trading is disabled.")
+        return None
+    total_required = round(estimated_cost_per_side * 2, 6)
+    if not ORDER_DRY_RUN and not uses_low_balance_paper_mode(state):
+        required_balance = max(total_required, ORDER_LOW_BALANCE_PAPER_THRESHOLD_USD)
+        balance_status = trader.get_balance_status()
+        balance_usd = float(balance_status.get("balance") or 0.0)
+        if balance_usd < required_balance:
+            activate_low_balance_paper_mode(state, balance_usd, required_balance, now)
+    for side in ("up", "down"):
+        order_record = state["orders"][side]
+        if order_record.get("restingPosted"):
+            continue
+        baseline_size = 0.0
+        if not ORDER_DRY_RUN and not uses_low_balance_paper_mode(state):
+            try:
+                baseline_size = trader.get_position_size(state["tokens"][side])
+            except Exception as exc:
+                log(f"Baseline position check failed for {state['slug']}:{side}: {exc}")
+        if not ORDER_DRY_RUN and not uses_low_balance_paper_mode(state):
+            trader.ensure_funds(estimated_cost_per_side)
+            response = trader.place_limit_buy(
+                state["tokens"][side],
+                ORDER_LIMIT_ORDER_SHARES,
+                ORDER_LIMIT_ORDER_PRICE_CENTS,
+                state.get("tickSize"),
+                state.get("negRisk"),
+                expiration_ts=None,
+            )
+        else:
+            response = {
+                "success": True,
+                "dryRun": True,
+                "lowBalancePaper": uses_low_balance_paper_mode(state),
+                "status": "live",
+                "orderID": f"paper-limit-{side}-{int(now.timestamp() * 1000)}",
+                "tokenId": state["tokens"][side],
+                "shares": ORDER_LIMIT_ORDER_SHARES,
+                "priceCents": ORDER_LIMIT_ORDER_PRICE_CENTS,
+                "makingAmount": estimated_cost_per_side,
+                "takingAmount": ORDER_LIMIT_ORDER_SHARES,
+            }
+        order_record["attemptCount"] += 1
+        order_record["lastAttemptAt"] = now.isoformat()
+        order_record["requestedAt"] = now.isoformat()
+        order_record["triggerType"] = "resting-limit"
+        order_record["thresholdCents"] = ORDER_LIMIT_ORDER_PRICE_CENTS
+        order_record["observedCents"] = ORDER_LIMIT_ORDER_PRICE_CENTS
+        order_record["amountUsd"] = estimated_cost_per_side
+        order_record["priceCap"] = round(ORDER_LIMIT_ORDER_PRICE_CENTS / 100.0, 4)
+        order_record["status"] = str(response.get("status") or "live").lower()
+        order_record["response"] = response
+        order_record["orderId"] = response.get("orderID") or response.get("orderId")
+        order_record["restingPosted"] = True
+        order_record["restingPostedAt"] = now.isoformat()
+        order_record["restingOrderId"] = order_record["orderId"]
+        order_record["restingPriceCents"] = ORDER_LIMIT_ORDER_PRICE_CENTS
+        order_record["restingShares"] = ORDER_LIMIT_ORDER_SHARES
+        order_record["restingBaselineSize"] = round(float(baseline_size), 6)
+        order_record["restingLastCheckedAt"] = now.isoformat()
+        order_record["attemptBlocked"] = True
+        order_record["mode"] = state.get("mode")
+        order_record["error"] = None
+        order_record["lastFailureKind"] = None
+        order_record["lastFailureAt"] = None
+        state["lastOrderAttemptAt"] = now.isoformat()
+        write_hour_log(
+            state,
+            "resting-order-posted",
+            {
+                "side": side,
+                "priceCents": ORDER_LIMIT_ORDER_PRICE_CENTS,
+                "shares": ORDER_LIMIT_ORDER_SHARES,
+                "amountUsd": estimated_cost_per_side,
+                "expirationTs": None,
+                "response": response,
+            },
+        )
+    state["restingLimitInitializedAt"] = now.isoformat()
+    state["restingLimitCancelAt"] = cancel_at.isoformat() if cancel_at else None
+    save_runtime_state(state)
+    log(
+        f"Posted resting-limit pair for {state['slug']} "
+        f"at {ORDER_LIMIT_ORDER_PRICE_CENTS}c x {ORDER_LIMIT_ORDER_SHARES} shares "
+        f"(cancel after {ORDER_LIMIT_ORDER_CANCEL_AFTER_MINUTES}m)"
+    )
+    return None
+
+
+def cancel_open_resting_orders(state: Dict[str, Any], trader, now: datetime) -> None:
+    open_order_ids = [
+        order_record.get("restingOrderId")
+        for order_record in (state.get("orders") or {}).values()
+        if isinstance(order_record, dict)
+        and order_record.get("restingPosted")
+        and not order_record.get("placed")
+        and not order_record.get("restingCanceledAt")
+        and order_record.get("restingOrderId")
+    ]
+    if not open_order_ids:
+        state["restingLimitCanceledAt"] = state.get("restingLimitCanceledAt") or now.isoformat()
+        save_runtime_state(state)
+        return
+    response = trader.cancel_orders(open_order_ids)
+    for side in ("up", "down"):
+        order_record = state["orders"][side]
+        if order_record.get("restingOrderId") in open_order_ids and not order_record.get("placed"):
+            order_record["restingCanceledAt"] = now.isoformat()
+            order_record["restingCancelResponse"] = response
+            order_record["status"] = "canceled"
+            order_record["error"] = "resting-canceled"
+            order_record["lastFailureKind"] = "canceled"
+            order_record["lastFailureAt"] = now.isoformat()
+    state["restingLimitCanceledAt"] = now.isoformat()
+    write_hour_log(
+        state,
+        "resting-orders-canceled",
+        {
+            "orderIds": open_order_ids,
+            "response": response,
+        },
+    )
+    save_runtime_state(state)
+    log(f"Canceled {len(open_order_ids)} resting 1H orders for {state['slug']} after the 30m window.")
+
+
+def refresh_resting_limit_orders(state: Dict[str, Any], trader, now: datetime) -> Optional[str]:
+    if not uses_resting_limit_strategy(state):
+        return None
+    init_exit_reason = place_resting_limit_orders(state, trader, now)
+    if init_exit_reason:
+        return init_exit_reason
+    if uses_low_balance_paper_mode(state):
+        prices = state.get("lastSample") or {}
+        for side in ("up", "down"):
+            order_record = state["orders"][side]
+            if (
+                not order_record.get("restingPosted")
+                or order_record.get("placed")
+                or order_record.get("restingCanceledAt")
+            ):
+                continue
+            current_cents = parse_float(
+                prices.get("upCents" if side == "up" else "downCents"),
+                None,
+            )
+            threshold_cents = parse_float(
+                order_record.get("restingPriceCents"),
+                ORDER_LIMIT_ORDER_PRICE_CENTS,
+            )
+            shares = parse_float(order_record.get("restingShares"), ORDER_LIMIT_ORDER_SHARES)
+            order_record["restingLastCheckedAt"] = now.isoformat()
+            if current_cents is None or threshold_cents is None or current_cents > threshold_cents:
+                continue
+            response = build_low_balance_limit_response(order_record, threshold_cents, shares)
+            order_record["placed"] = True
+            order_record["attemptBlocked"] = True
+            order_record["requestedAt"] = order_record.get("requestedAt") or now.isoformat()
+            order_record["response"] = response
+            order_record["orderId"] = order_record.get("restingOrderId") or response.get("orderId")
+            order_record["status"] = "simulated-matched"
+            order_record["amountUsd"] = parse_float(response.get("makingAmount"), order_record.get("amountUsd"))
+            order_record["error"] = None
+            order_record["lastFailureKind"] = None
+            order_record["lastFailureAt"] = None
+            if not state.get("firstEntrySide"):
+                mark_first_entry_side(state, order_record, now)
+            write_hour_log(
+                state,
+                "order-placed",
+                {
+                    "side": side,
+                    "triggerType": order_record.get("triggerType"),
+                    "thresholdCents": threshold_cents,
+                    "observedCents": current_cents,
+                    "amountUsd": order_record.get("amountUsd"),
+                    "response": response,
+                },
+            )
+            log(
+                f"[PAPER-LOW-BALANCE] Filled resting {side.upper()} order for {state['slug']} "
+                f"at {threshold_cents}c ({shares} shares)"
+            )
+            if mark_pair_complete_if_ready(state, now):
+                save_runtime_state(state)
+                return "paired-complete"
+        cancel_at = parse_date(state.get("restingLimitCancelAt")) or get_resting_limit_cancel_at(state)
+        if cancel_at is not None and now >= cancel_at and not state.get("restingLimitCanceledAt"):
+            if has_placed_orders(state):
+                state["restingLimitCancelAt"] = None
+                save_runtime_state(state)
+            else:
+                cancel_open_resting_orders(state, trader, now)
+        return None
+    open_order_ids = set()
+    if not ORDER_DRY_RUN:
+        try:
+            open_rows = trader.get_open_orders(market_id=state.get("marketId"))
+            open_order_ids = extract_open_order_ids(open_rows)
+        except Exception as exc:
+            write_hour_log(state, "resting-open-orders-error", {"error": str(exc)})
+            log(f"Open-order refresh failed for {state['slug']}: {exc}")
+    for side in ("up", "down"):
+        order_record = state["orders"][side]
+        if not order_record.get("restingPosted"):
+            continue
+        resting_order_id = order_record.get("restingOrderId")
+        current_size = 0.0
+        if not ORDER_DRY_RUN:
+            try:
+                current_size = trader.get_position_size(state["tokens"][side])
+            except Exception as exc:
+                log(f"Resting position check failed for {state['slug']}:{side}: {exc}")
+                continue
+        order_record["restingLastCheckedAt"] = now.isoformat()
+        if mark_resting_fill_detected(state, side, current_size, now):
+            save_runtime_state(state)
+            return "paired-complete"
+        if not resting_order_id or order_record.get("placed") or order_record.get("restingCanceledAt"):
+            continue
+        order_detail = None
+        if not ORDER_DRY_RUN:
+            try:
+                order_detail = trader.get_order_detail(resting_order_id)
+            except Exception as exc:
+                write_hour_log(
+                    state,
+                    "resting-order-detail-error",
+                    {"side": side, "orderId": resting_order_id, "error": str(exc)},
+                )
+                log(f"Resting order detail check failed for {state['slug']}:{side}: {exc}")
+        status_upper = normalize_resting_order_status(order_detail)
+        if status_upper == "MATCHED":
+            matched_shares = parse_float((order_detail or {}).get("size_matched"), 0.0) or 0.0
+            if mark_resting_fill_detected(state, side, current_size, now, matched_shares):
+                save_runtime_state(state)
+                return "paired-complete"
+            continue
+        if is_resting_order_active_status(status_upper):
+            continue
+        if status_upper in {"INVALID", "CANCELED", "CANCELLED", "EXPIRED"}:
+            apply_resting_terminal_status(state, side, status_upper, order_detail, now)
+            continue
+        if resting_order_id in open_order_ids:
+            continue
+        posted_at = parse_date(order_record.get("restingPostedAt"))
+        if posted_at is not None and (now - posted_at).total_seconds() < 15:
+            continue
+        apply_resting_terminal_status(
+            state,
+            side,
+            status_upper or "MISSING",
+            order_detail,
+            now,
+        )
+    cancel_at = parse_date(state.get("restingLimitCancelAt")) or get_resting_limit_cancel_at(state)
+    if cancel_at is not None and now >= cancel_at and not state.get("restingLimitCanceledAt"):
+        if has_placed_orders(state):
+            state["restingLimitCancelAt"] = None
+            save_runtime_state(state)
+            log(
+                f"Kept remaining resting orders for {state['slug']} after the 30m window "
+                f"because at least one side had already filled."
+            )
+        else:
+            cancel_open_resting_orders(state, trader, now)
+    return "paired-complete" if mark_pair_complete_if_ready(state, now) else None
+
+
 def maybe_place_hedge(state, trader, prices, now: datetime):
     if not state.get("firstEntrySide"):
         return False
     hedge_side = opposite_side(state["firstEntrySide"])
-    if state["orders"][hedge_side]["placed"]:
+    hedge_order = state["orders"][hedge_side]
+    if hedge_order["placed"]:
+        return False
+    remaining_minutes = get_remaining_minutes(state, now)
+    if remaining_minutes <= ORDER_MIN_HEDGE_ENTRY_MINUTES_REMAINING:
+        if not hedge_order.get("attemptBlocked"):
+            hedge_order["attemptBlocked"] = True
+            hedge_order["triggerType"] = "hedge"
+            hedge_order["thresholdCents"] = ORDER_HEDGE_ENTRY_CENTS
+            hedge_order["observedCents"] = prices["upCents"] if hedge_side == "up" else prices["downCents"]
+            hedge_order["amountUsd"] = state["orderUsd"]
+            hedge_order["error"] = "late-block"
+            hedge_order["lastFailureKind"] = "late-block"
+            hedge_order["lastFailureAt"] = now.isoformat()
+            write_hour_log(
+                state,
+                "late-block",
+                {
+                    "remainingMinutes": round(remaining_minutes, 2),
+                    "candidateSide": hedge_side,
+                    "candidateCents": hedge_order["observedCents"],
+                    "triggerType": "hedge",
+                },
+            )
+            save_runtime_state(state)
+            log(
+                f"Skipped {state['slug']} hedge because only "
+                f"{round(remaining_minutes, 2)} minutes remained"
+            )
         return False
     hedge_cents = prices["upCents"] if hedge_side == "up" else prices["downCents"]
     if hedge_cents > ORDER_HEDGE_ENTRY_CENTS:
@@ -3618,6 +4482,16 @@ def record_sample(state, trader):
             "downCents": prices["downCents"],
         },
     )
+
+    if uses_resting_limit_strategy(state):
+        exit_reason = refresh_resting_limit_orders(state, trader, now)
+        save_runtime_state(state)
+        log(summarize_state(state))
+        if exit_reason:
+            return exit_reason
+        if ORDER_MAX_SAMPLES > 0 and state["sampleCount"] >= ORDER_MAX_SAMPLES:
+            return "max-samples"
+        return None
 
     if refresh_pending_order_submissions(state, trader, now):
         save_runtime_state(state)
@@ -3708,15 +4582,35 @@ def main():
 
     trader = create_trader()
     trader.initialize()
-    log(
-        "Order worker ready | "
-        f"variant={ORDER_VARIANT} "
-        f"first={ORDER_FIRST_ENTRY_CENTS}c "
-        f"hedge={ORDER_HEDGE_ENTRY_CENTS}c "
-        f"sample={int(ORDER_SAMPLE_INTERVAL_MS / 1000)}s "
-        f"submitGap={int(ORDER_MIN_ORDER_INTERVAL_MS / 1000)}s "
-        f"retryGap={int(ORDER_ATTEMPT_COOLDOWN_MS / 1000)}s"
-    )
+    startup_parts = [
+        "Order worker ready | ",
+        f"variant={ORDER_VARIANT} ",
+        f"trading={'on' if ORDER_TRADING_ENABLED else 'off'} ",
+        f"mode={ORDER_STRATEGY_MODE} ",
+    ]
+    if ORDER_STRATEGY_MODE == "resting-limit":
+        startup_parts.extend(
+            [
+                f"limit={ORDER_LIMIT_ORDER_PRICE_CENTS}c ",
+                f"shares={ORDER_LIMIT_ORDER_SHARES} ",
+                f"lowBalancePaper<${ORDER_LOW_BALANCE_PAPER_THRESHOLD_USD} ",
+                f"cancelAfter={ORDER_LIMIT_ORDER_CANCEL_AFTER_MINUTES}m ",
+                f"sample={int(ORDER_SAMPLE_INTERVAL_MS / 1000)}s",
+            ]
+        )
+    else:
+        startup_parts.extend(
+            [
+                f"first={ORDER_FIRST_ENTRY_CENTS}c ",
+                f"hedge={ORDER_HEDGE_ENTRY_CENTS}c ",
+                f"firstLate={ORDER_MIN_FIRST_ENTRY_MINUTES_REMAINING}m ",
+                f"hedgeLate={ORDER_MIN_HEDGE_ENTRY_MINUTES_REMAINING}m ",
+                f"sample={int(ORDER_SAMPLE_INTERVAL_MS / 1000)}s ",
+                f"submitGap={int(ORDER_MIN_ORDER_INTERVAL_MS / 1000)}s ",
+                f"retryGap={int(ORDER_ATTEMPT_COOLDOWN_MS / 1000)}s",
+            ]
+        )
+    log("".join(startup_parts))
     state = start_event_with_risk_gate(datetime.now(UTC))
 
     try:

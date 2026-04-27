@@ -12,11 +12,14 @@
     "monitor:4h": "set MONITOR_VARIANT=4h&& set MONITOR_WINDOW_HOURS=4&& set MONITOR_WINDOW_MINUTES=240&& node scripts/monitor.js",
     "monitor:15m": "set MONITOR_VARIANT=15m&& set MONITOR_WINDOW_HOURS=0.25&& set MONITOR_WINDOW_MINUTES=15&& node scripts/monitor.js",
     "monitor:5m": "set MONITOR_VARIANT=5m&& set MONITOR_WINDOW_HOURS=0.0833333333&& set MONITOR_WINDOW_MINUTES=5&& node scripts/monitor.js",
+    "weather:sync": "node scripts/weather_sync_launcher.js",
+    "weather:sync:worker": "node scripts/weather_sync.js",
     "order": "node scripts/order-launcher.js",
+    "order:recovery": "node scripts/order_recovery_launcher.js",
+    "settlement:recovery": "node scripts/settlement_recovery_launcher.js",
     "order:1h": "set ORDER_VARIANT=1h&& python scripts/order.py",
     "order:4h": "set ORDER_VARIANT=4h&& python scripts/order.py",
-    "order:5m": "set ORDER_VARIANT=5m&& python scripts/order.py",
-    "settlement": "node scripts/settlement-launcher.js"
+    "order:5m": "set ORDER_VARIANT=5m&& python scripts/order.py"
   },
   "dependencies": {
     "@polymarket/builder-relayer-client": "^0.0.8",
