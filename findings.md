@@ -19,3 +19,21 @@
   - `recoveryMode = false`
   - `totalEvents = 0`
 - Weather sync is still running and weather data was not cleared in this step.
+
+## Weather Failed Orders Investigation
+- Weather service logs after the V2 client change show live-order runs using `Signature type 1` successfully.
+- Recent weather live-order summaries show `bought=0 failed=0 skipped=8` while current candidates are still in `waiting` state.
+- Need inspect `data/weather_predictions/live-orders.json` for today's actual record statuses before re-submitting.
+- `data/weather_predictions/live-orders.json` contains 8 records for `2026-04-29` failed around `00:15` with `order_version_mismatch`.
+- `scripts/weather_live_order.py` treats `failed` as inactive but not retryable, so these records are skipped as existing instead of being retried.
+
+## BTC 4h Prestart Guard
+- `scripts/order_recovery.py` already retries failed limit submissions through `retryEligibleAt` and `RETRY_GAP_MS`.
+- Current 4h config uses `limit-pair` with prestart entry; there is no dedicated 5-minute guard to stop new retries before event start.
+- `cancel_open_limit_orders()` is globally disabled for 4h, so single-sided risk cancellation needs a separate targeted path.
+
+## BTC 4h Missed Event Root Cause
+- The missed 4h event was not caused by a rejected limit order.
+- `order_recovery.py` had a single `activeEvent` slot that was used for both the current order lifecycle and old-event settlement.
+- When one 4h event was still active or waiting to resolve, the next event's 1-hour prestart window was skipped because `maybe_start_current_event()` was only called when `activeEvent` was empty.
+- Required behavior is event-independent: each event must get its own fixed Up/Down limit orders, while previous events can remain pending for settlement.

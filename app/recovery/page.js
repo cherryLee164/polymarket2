@@ -189,12 +189,66 @@ function DailyPnlStrip({ title, rows }) {
   );
 }
 
+function countOpenLimitOrders(event) {
+  const orders = event?.orders || {};
+  return ["up", "down"].filter((side) => orders?.[side]?.status === "limit-open").length;
+}
+
+function RecoveryResetStrip({ variant }) {
+  const summary = variant?.summary || {};
+  const event = variant?.activeEvent || null;
+  const strategy = summary.strategy || variant?.runtime?.strategy || {};
+  const openLimitOrders = countOpenLimitOrders(event);
+  const limitShares = Number(strategy.limitShares || strategy.limitOrderShares || 0);
+  const limitPriceCents = Number(strategy.limitPriceCents || 40);
+  const fixedLegUsd = Number(strategy.estimatedOrderUsd || strategy.fixedLimitLegUsd || summary.currentLegUsd || 0);
+  const resetPnl = Number(summary.realizedNetPnlUsd || 0);
+  const resetPnlTone =
+    resetPnl > 0 ? "text-[var(--signal-up)]" : resetPnl < 0 ? "text-[var(--signal-down)]" : "text-white";
+
+  return (
+    <section className="rounded-[2rem] border border-[rgba(20,20,20,0.10)] bg-[linear-gradient(135deg,rgba(20,20,20,0.92),rgba(64,54,42,0.88))] p-6 text-white shadow-[0_24px_70px_rgba(28,24,18,0.22)]">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="font-display text-xs uppercase tracking-[0.42em] text-white/55">4H Reset Baseline</p>
+          <h2 className="mt-3 text-3xl font-semibold tracking-[0.04em]">4 小时收益从这里重新计算</h2>
+          <p className="mt-3 text-sm leading-6 text-white/68">
+            重置时间 {formatDateTime(summary.resetAt)}，历史收益、事件和下单台账已清空，当前活跃事件会继续被跟踪。
+          </p>
+        </div>
+        <div className="grid gap-3 text-sm sm:grid-cols-3 lg:min-w-[620px]">
+          <div className="rounded-[1.3rem] border border-white/12 bg-white/8 px-4 py-4">
+            <p className="text-white/52">当前事件</p>
+            <p className="mt-2 truncate font-semibold">{event?.slug || "--"}</p>
+            <p className="mt-2 text-white/60">{formatStatus(event?.status)}</p>
+          </div>
+          <div className="rounded-[1.3rem] border border-white/12 bg-white/8 px-4 py-4">
+            <p className="text-white/52">挂单状态</p>
+            <p className="mt-2 font-semibold">{openLimitOrders}/2 张限价单</p>
+            <p className="mt-2 text-white/60">
+              {limitShares || "--"} 份 / {limitPriceCents || "--"}c / {formatUsd(fixedLegUsd)}
+            </p>
+          </div>
+          <div className="rounded-[1.3rem] border border-white/12 bg-white/8 px-4 py-4">
+            <p className="text-white/52">新周期收益</p>
+            <p className={`mt-2 font-semibold ${resetPnlTone}`}>
+              {formatUsd(summary.realizedNetPnlUsd)}
+            </p>
+            <p className="mt-2 text-white/60">{summary.totalEvents || 0} 个已结算事件</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default async function RecoveryPage() {
   const snapshot = await getRecoverySnapshot();
   const pnlSummary = snapshot.pnlSummary || {};
   const eventRows = snapshot.eventRows || [];
   const tradeRows = snapshot.tradeRows || [];
   const dailyBreakdown = pnlSummary.dailyBreakdown || [];
+  const primaryVariant = snapshot.variants?.[0] || null;
 
   return (
     <main className="min-h-screen bg-[var(--background)] px-4 py-6 text-[var(--ink)] sm:px-6 lg:px-8">
@@ -242,6 +296,8 @@ export default async function RecoveryPage() {
             helper={`${pnlSummary.sevenDayStartKey || "--"} 至 ${pnlSummary.todayKey || "--"}`}
           />
         </section>
+
+        <RecoveryResetStrip variant={primaryVariant} />
 
         <DailyPnlStrip title="BTC 近 7 天逐日收益" rows={dailyBreakdown} />
 

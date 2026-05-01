@@ -106,36 +106,36 @@ function buildYesterdayLossCities({ liveRecords, review }) {
 
 function MetricCard({ label, value, helper, money = true }) {
   return (
-    <article className="rounded-[1.8rem] border border-[var(--line)] bg-[var(--panel)] px-5 py-5 shadow-[var(--shadow)]">
+    <article className="rounded-[1.35rem] border border-[var(--line)] bg-[var(--panel)] px-4 py-3 shadow-[var(--shadow)]">
       <p className="text-sm text-[var(--ink-soft)]">{label}</p>
-      <div className={`mt-3 text-4xl font-semibold ${money ? metricToneClass(value) : "text-neutral-950"}`}>
+      <div className={`mt-2 text-3xl font-semibold ${money ? metricToneClass(value) : "text-neutral-950"}`}>
         {money ? formatMoney(value) : value}
       </div>
-      <p className="mt-3 text-sm text-[var(--ink-soft)]">{helper}</p>
+      <p className="mt-2 text-sm text-[var(--ink-soft)]">{helper}</p>
     </article>
   );
 }
 
 function DailyPnlStrip({ rows }) {
   return (
-    <section className="rounded-[2rem] border border-[var(--line)] bg-[rgba(255,255,255,0.62)] p-5 shadow-[var(--shadow)]">
+    <section className="rounded-[1.6rem] border border-[var(--line)] bg-[rgba(255,255,255,0.62)] p-4 shadow-[var(--shadow)]">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Weather PnL</p>
-          <h2 className="font-display mt-3 text-2xl font-semibold tracking-[0.05em] text-neutral-950">
+          <h2 className="font-display mt-2 text-xl font-semibold tracking-[0.05em] text-neutral-950">
             近 7 天天气收益
           </h2>
         </div>
         <p className="text-sm text-[var(--ink-soft)]">赢单按预收益，输单按投注额亏损</p>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
         {rows.map((row) => (
           <article
             key={row.date}
-            className="rounded-[1.35rem] border border-[var(--line)] bg-[rgba(255,255,255,0.78)] px-4 py-4"
+            className="rounded-[1.1rem] border border-[var(--line)] bg-[rgba(255,255,255,0.78)] px-3 py-3"
           >
             <p className="text-sm text-[var(--ink-soft)]">{formatShortDate(row.date)}</p>
-            <div className={`mt-2 text-2xl font-semibold ${metricToneClass(row.netPnlUsd)}`}>
+            <div className={`mt-1 text-xl font-semibold ${metricToneClass(row.netPnlUsd)}`}>
               {formatMoney(row.netPnlUsd)}
             </div>
             <p className="mt-2 text-sm text-[var(--ink-soft)]">{row.settledRecords || 0} 条已结算</p>

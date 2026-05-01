@@ -495,6 +495,18 @@ def summarize_position(position: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def order_book_value(book: Any, key: str, default: Any = None) -> Any:
+    if isinstance(book, dict):
+        return book.get(key, default)
+    return getattr(book, key, default)
+
+
+def order_book_level_price(level: Any) -> float:
+    if isinstance(level, dict):
+        return float(level.get("price") or 0)
+    return float(getattr(level, "price", 0) or 0)
+
+
 def estimate_sell_candidate(trader, position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not AUTO_SELL_ENABLED:
         return None
@@ -532,7 +544,11 @@ def estimate_sell_candidate(trader, position: Dict[str, Any]) -> Optional[Dict[s
         return None
 
     market = order_engine.fetch_market_for_token(token_id) or {}
-    top_bid = float(book.bids[-1].price) if getattr(book, "bids", None) else 0.0
+    bids = order_book_value(book, "bids", []) or []
+    top_bid = order_book_level_price(bids[-1]) if bids else 0.0
+    tick_size = order_book_value(book, "tick_size") or market.get("orderPriceMinTickSize") or "0.01"
+    book_neg_risk = order_book_value(book, "neg_risk")
+    neg_risk = bool(book_neg_risk) if book_neg_risk is not None else bool(market.get("negativeRisk"))
     return {
         "position": position,
         "tokenId": token_id,
@@ -543,8 +559,8 @@ def estimate_sell_candidate(trader, position: Dict[str, Any]) -> Optional[Dict[s
         "currentValueUsd": round_to_six(current_value),
         "topBid": round_to_six(top_bid),
         "sellPrice": round_to_six(executable_price),
-        "tickSize": str(book.tick_size),
-        "negRisk": bool(market.get("negativeRisk")),
+        "tickSize": str(tick_size),
+        "negRisk": neg_risk,
     }
 
 
@@ -585,14 +601,19 @@ def perform_auto_sell(state: Dict[str, Any], trader, funder: str, before_balance
     running_balance = before_balance["balanceUsd"]
     for candidate in sorted(candidates, key=lambda item: item["currentValueUsd"], reverse=True)[:MAX_SELLS_PER_RUN]:
         position = candidate["position"]
-        response = trader.place_sell(
-            candidate["tokenId"],
-            candidate["shares"],
-            candidate["sellPrice"],
-            candidate["tickSize"],
-            candidate["negRisk"],
-        )
-        time.sleep(max(1, AUTO_SELL_VERIFY_WAIT_MS / 1000))
+        sell_error = None
+        try:
+            response = trader.place_sell(
+                candidate["tokenId"],
+                candidate["shares"],
+                candidate["sellPrice"],
+                candidate["tickSize"],
+                candidate["negRisk"],
+            )
+            time.sleep(max(1, AUTO_SELL_VERIFY_WAIT_MS / 1000))
+        except Exception as exc:
+            sell_error = str(exc)
+            response = {"success": False, "error": sell_error}
 
         refreshed_positions = fetch_open_positions(funder)
         remaining = next(
@@ -616,6 +637,7 @@ def perform_auto_sell(state: Dict[str, Any], trader, funder: str, before_balance
             "currentValueUsd": candidate["currentValueUsd"],
             "response": response,
             "sold": sold,
+            "error": sell_error,
             "remainingSize": float(remaining.get("size") or 0) if remaining else 0.0,
             "balanceBeforeUsd": running_balance,
             "balanceAfterUsd": refreshed_balance["balanceUsd"],

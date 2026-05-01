@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import requests
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import (
+from py_clob_client_v2.client import ClobClient
+from py_clob_client_v2.clob_types import (
     BalanceAllowanceParams,
     MarketOrderArgs,
     OpenOrderParams,
@@ -22,9 +22,9 @@ from py_clob_client.clob_types import (
     OrderType,
     PartialCreateOrderOptions,
 )
-from py_clob_client.exceptions import PolyApiException
-from py_clob_client.http_helpers import helpers as clob_http_helpers
-from py_clob_client.order_builder.constants import BUY, SELL
+from py_clob_client_v2.exceptions import PolyApiException
+from py_clob_client_v2.http_helpers import helpers as clob_http_helpers
+from py_clob_client_v2.order_builder.constants import BUY, SELL
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -530,15 +530,20 @@ def configure_clob_http_transport() -> None:
         timeout=timeout,
     )
 
-    def request_with_detail(endpoint: str, method: str, headers=None, data=None):
+    def request_with_detail(endpoint: str, method: str, headers=None, data=None, params=None):
         try:
-            headers = clob_http_helpers.overloadHeaders(method, headers)
+            overload_headers = getattr(clob_http_helpers, "_overload_headers", None) or getattr(
+                clob_http_helpers, "overloadHeaders", None
+            )
+            if overload_headers is not None:
+                headers = overload_headers(method, headers)
             if isinstance(data, str):
                 response = clob_http_helpers._http_client.request(
                     method=method,
                     url=endpoint,
                     headers=headers,
                     content=data.encode("utf-8"),
+                    params=params,
                 )
             else:
                 response = clob_http_helpers._http_client.request(
@@ -546,6 +551,7 @@ def configure_clob_http_transport() -> None:
                     url=endpoint,
                     headers=headers,
                     json=data,
+                    params=params,
                 )
 
             if response.status_code != 200:
@@ -2955,12 +2961,16 @@ def create_level1_client(signature_type: int, funder: str):
         key=POLY_PRIVATE_KEY,
         signature_type=signature_type,
         funder=funder,
+        retry_on_error=True,
     )
 
 
 def probe_client(signature_type: int, funder: str):
     client = create_level1_client(signature_type, funder)
-    client.set_api_creds(client.create_or_derive_api_creds())
+    if hasattr(client, "create_or_derive_api_key"):
+        client.set_api_creds(client.create_or_derive_api_key())
+    else:
+        client.set_api_creds(client.create_or_derive_api_creds())
     snapshot = client.get_balance_allowance(
         BalanceAllowanceParams(asset_type="COLLATERAL", signature_type=signature_type)
     )
@@ -3167,30 +3177,32 @@ def create_trader():
 
         def place_buy(self, token_id: str, amount_usd: float, price_cap: float, tick_size, neg_risk):
             order_type = OrderType.FAK if ORDER_EXECUTION_TYPE == "FAK" else OrderType.FOK
-            order = self.client.create_market_order(
-                MarketOrderArgs(
-                    token_id=token_id,
-                    amount=amount_usd,
-                    side=BUY,
-                    price=float(price_cap or 0.0),
-                    order_type=order_type,
-                ),
-                PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk),
+            order_args = MarketOrderArgs(
+                token_id=token_id,
+                amount=amount_usd,
+                side=BUY,
+                price=float(price_cap or 0.0),
+                order_type=order_type,
             )
+            options = PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk)
+            if hasattr(self.client, "create_and_post_market_order"):
+                return self.client.create_and_post_market_order(order_args, options, order_type)
+            order = self.client.create_market_order(order_args, options)
             return self.client.post_order(order, order_type)
 
         def place_sell(self, token_id: str, shares: float, price_floor: float, tick_size, neg_risk):
             order_type = OrderType.FAK if ORDER_EXECUTION_TYPE == "FAK" else OrderType.FOK
-            order = self.client.create_market_order(
-                MarketOrderArgs(
-                    token_id=token_id,
-                    amount=shares,
-                    side=SELL,
-                    price=price_floor,
-                    order_type=order_type,
-                ),
-                PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk),
+            order_args = MarketOrderArgs(
+                token_id=token_id,
+                amount=shares,
+                side=SELL,
+                price=price_floor,
+                order_type=order_type,
             )
+            options = PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk)
+            if hasattr(self.client, "create_and_post_market_order"):
+                return self.client.create_and_post_market_order(order_args, options, order_type)
+            order = self.client.create_market_order(order_args, options)
             return self.client.post_order(order, order_type)
 
         def get_position_size(self, token_id: str) -> float:
@@ -3205,17 +3217,18 @@ def create_trader():
             neg_risk,
             expiration_ts: Optional[int] = None,
         ):
-            order = self.client.create_order(
-                OrderArgs(
-                    token_id=token_id,
-                    price=round(float(price_cents) / 100.0, 4),
-                    size=float(shares),
-                    side=BUY,
-                    expiration=int(expiration_ts or 0),
-                ),
-                PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk),
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=round(float(price_cents) / 100.0, 4),
+                size=float(shares),
+                side=BUY,
+                expiration=int(expiration_ts or 0),
             )
+            options = PartialCreateOrderOptions(tick_size=tick_size, neg_risk=neg_risk)
             order_type = OrderType.GTD if expiration_ts else OrderType.GTC
+            if hasattr(self.client, "create_and_post_order"):
+                return self.client.create_and_post_order(order_args, options, order_type)
+            order = self.client.create_order(order_args, options)
             return self.client.post_order(order, order_type)
 
         def get_open_orders(
@@ -3224,6 +3237,8 @@ def create_trader():
             asset_id: Optional[str] = None,
         ):
             params = OpenOrderParams(market=market_id, asset_id=asset_id)
+            if hasattr(self.client, "get_open_orders"):
+                return self.client.get_open_orders(params)
             return self.client.get_orders(params)
 
         def get_order_detail(self, order_id: str):

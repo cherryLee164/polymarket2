@@ -24,6 +24,8 @@ const WEATHER_LIVE_MAX_ORDER_ATTEMPTS = Math.max(
   Number(process.env.WEATHER_LIVE_MAX_ORDER_ATTEMPTS || 288),
 );
 const WEATHER_LIVE_RETRY_AFTER_MS = Number(process.env.WEATHER_LIVE_RETRY_AFTER_SECONDS || 300) * 1000;
+const WEATHER_LIVE_MAX_NO_PRICE = Number(process.env.WEATHER_LIVE_MAX_NO_PRICE || 0.95);
+const WEATHER_LIVE_HIGH_PRICE_SKIP_REASON = `no-price-above-${WEATHER_LIVE_MAX_NO_PRICE.toFixed(2)}`;
 
 function envEnabled(name, fallback = true) {
   const raw = process.env[name];
@@ -86,13 +88,15 @@ function releaseLock() {
 }
 
 function isTradeableWeatherRecord(record, localDate) {
+  const noPrice = Number(record?.buyNoPrice);
   return (
     record?.date === localDate &&
     record?.captureSlotId === "00" &&
     record?.marketSlug &&
     record?.eventSlug &&
-    Number.isFinite(Number(record?.buyNoPrice)) &&
-    Number(record?.buyNoPrice) < 1 &&
+    Number.isFinite(noPrice) &&
+    noPrice > 0 &&
+    noPrice <= WEATHER_LIVE_MAX_NO_PRICE &&
     String(record?.status || "").toLowerCase() !== "resolved"
   );
 }
@@ -112,10 +116,19 @@ function todayLiveOrderRecords(snapshot) {
 function countTodayLiveOrders(snapshot) {
   return todayLiveOrderRecords(snapshot).filter(
     (record) =>
+      isHighPriceSkippedLiveOrder(record) ||
       !["failed", "skipped", "cancelled", "canceled"].includes(
         String(record?.status || "").toLowerCase(),
       ),
   ).length;
+}
+
+function isHighPriceSkippedLiveOrder(record) {
+  return (
+    String(record?.status || "").toLowerCase() === "skipped" &&
+    (record?.skipReason === WEATHER_LIVE_HIGH_PRICE_SKIP_REASON ||
+      String(record?.fillStatus || "").toLowerCase() === "price-above-limit")
+  );
 }
 
 function numeric(value) {
@@ -170,6 +183,12 @@ function isRetryableUnconfirmedLiveOrder(record, localDate) {
     return false;
   }
   if (hasConfirmedLiveFill(record)) {
+    return false;
+  }
+  if (
+    record?.skipReason === WEATHER_LIVE_HIGH_PRICE_SKIP_REASON ||
+    String(record?.fillStatus || "").toLowerCase() === "price-above-limit"
+  ) {
     return false;
   }
   if (orderAttemptCount(record) >= WEATHER_LIVE_MAX_ORDER_ATTEMPTS) {
@@ -295,7 +314,9 @@ async function runOnce() {
       `livePending=${snapshot.liveOrders?.summary?.overall?.pending ?? 0} ` +
       `liveNet=${snapshot.liveOrders?.summary?.overall?.netPnlUsd ?? 0} ` +
       `midday95Today=${snapshot.middayNo95?.summary?.today?.records ?? 0} ` +
-      `midday95Net=${snapshot.middayNo95?.summary?.overall?.netPnlUsd ?? 0}`,
+      `midday95Net=${snapshot.middayNo95?.summary?.overall?.netPnlUsd ?? 0} ` +
+      `thresholdSimToday=${snapshot.thresholdSim?.summary?.today?.records ?? 0} ` +
+      `thresholdSimNet=${snapshot.thresholdSim?.summary?.overall?.netPnlUsd ?? 0}`,
   );
 }
 

@@ -213,9 +213,9 @@ function SummaryCard({ label, value, helper, tone = "neutral" }) {
   }[tone];
 
   return (
-    <article className="rounded-[1.7rem] border border-[var(--line)] bg-[var(--panel)] px-5 py-4 shadow-[var(--shadow)]">
+    <article className="rounded-[1.35rem] border border-[var(--line)] bg-[var(--panel)] px-4 py-3 shadow-[var(--shadow)]">
       <p className="text-sm text-[var(--ink-soft)]">{label}</p>
-      <p className={`font-display mt-2 text-[2.05rem] font-semibold ${toneClass}`}>{value}</p>
+      <p className={`font-display mt-1 text-[1.65rem] font-semibold ${toneClass}`}>{value}</p>
       {helper ? <p className="mt-1 text-sm text-[var(--ink-soft)]">{helper}</p> : null}
     </article>
   );
@@ -223,22 +223,22 @@ function SummaryCard({ label, value, helper, tone = "neutral" }) {
 
 function DailyPnlStrip({ title, rows }) {
   return (
-    <section className="rounded-[1.8rem] border border-[var(--line)] bg-[rgba(255,255,255,0.62)] p-4 shadow-[var(--shadow)]">
+    <section className="rounded-[1.5rem] border border-[var(--line)] bg-[rgba(255,255,255,0.62)] p-4 shadow-[var(--shadow)]">
       <div className="flex items-end justify-between gap-4">
         <div>
           <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Daily PnL</p>
-          <h3 className="mt-3 text-xl font-semibold text-neutral-950">{title}</h3>
+          <h3 className="mt-2 text-lg font-semibold text-neutral-950">{title}</h3>
         </div>
         <p className="text-sm text-[var(--ink-soft)]">最近 7 天，按已结算实盘订单统计</p>
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
         {rows.map((row) => (
           <article
             key={row.date}
-            className="rounded-[1.2rem] border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-4 py-4"
+            className="rounded-[1.05rem] border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-3 py-3"
           >
             <p className="text-sm text-[var(--ink-soft)]">{formatShortDate(row.date)}</p>
-            <div className={`mt-2 text-2xl font-semibold ${renderPnlClass(row.netPnlUsd)}`}>
+            <div className={`mt-1 text-xl font-semibold ${renderPnlClass(row.netPnlUsd)}`}>
               {formatMoney(row.netPnlUsd)}
             </div>
             <p className="mt-2 text-sm text-[var(--ink-soft)]">
@@ -356,9 +356,9 @@ export async function WeatherSectionPanel() {
 
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-[2.2rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,246,224,0.92))] shadow-[var(--shadow)]">
-        <div className="flex flex-col gap-5 p-5 lg:p-6">
-          <div className="grid gap-4 md:grid-cols-3">
+      <section className="overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,246,224,0.92))] shadow-[var(--shadow)]">
+        <div className="flex flex-col gap-4 p-4 lg:p-5">
+          <div className="grid gap-3 md:grid-cols-3">
             <SummaryCard
               label="实盘总收益"
               value={formatMoney(liveOverall.netPnlUsd)}

@@ -4,6 +4,7 @@ import { MonitorAutoRefresh } from "@/app/components/monitor-auto-refresh";
 import { MonitorSectionPanel } from "@/app/components/monitor-section";
 import { WeatherReviewPanel } from "@/app/components/weather-review-section";
 import { WeatherSectionPanel } from "@/app/components/weather-section";
+import { WeatherSimulationPanel } from "@/app/components/weather-simulation-section";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -30,7 +31,9 @@ function buildHomeHref(currentQuery, patch) {
 }
 
 function WeatherTabs({ currentQuery }) {
-  const activeTab = currentQuery.weatherTab === "review" ? "review" : "live";
+  const activeTab = ["review", "simulation"].includes(currentQuery.weatherTab)
+    ? currentQuery.weatherTab
+    : "live";
   const tabs = [
     {
       id: "live",
@@ -42,25 +45,30 @@ function WeatherTabs({ currentQuery }) {
       label: "复盘数据",
       helper: "昨日亏损、温差和正偏差排行",
     },
+    {
+      id: "simulation",
+      label: "模拟观察",
+      helper: "10/11/12/13 点多阈值模拟单",
+    },
   ];
 
   return (
-    <section className="rounded-[2rem] border border-[var(--line)] bg-[rgba(255,255,255,0.58)] p-3 shadow-[var(--shadow)]">
-      <div className="grid gap-3 md:grid-cols-2">
+    <section className="rounded-[1.6rem] border border-[var(--line)] bg-[rgba(255,255,255,0.58)] p-2 shadow-[var(--shadow)]">
+      <div className="grid gap-2 md:grid-cols-3">
         {tabs.map((tab) => {
           const active = activeTab === tab.id;
           return (
             <Link
               key={tab.id}
               href={buildHomeHref(currentQuery, { surface: "weather", weatherTab: tab.id })}
-              className={`rounded-[1.55rem] border px-5 py-4 transition ${
+              className={`rounded-[1.25rem] border px-4 py-3 transition ${
                 active
                   ? "border-[var(--accent-strong)] bg-[linear-gradient(135deg,rgba(214,122,67,0.20),rgba(255,255,255,0.86))] shadow-[0_14px_36px_rgba(184,87,38,0.14)]"
                   : "border-[var(--line)] bg-[rgba(255,255,255,0.64)] hover:border-[var(--accent-strong)]"
               }`}
             >
               <div className="flex items-center justify-between gap-3">
-                <div className="font-display text-2xl font-semibold tracking-[0.04em] text-neutral-950">
+                <div className="font-display text-lg font-semibold tracking-[0.04em] text-neutral-950">
                   {tab.label}
                 </div>
                 <span
@@ -73,7 +81,7 @@ function WeatherTabs({ currentQuery }) {
                   TAB
                 </span>
               </div>
-              <p className="mt-2 text-sm text-[var(--ink-soft)]">{tab.helper}</p>
+              <p className="mt-1 text-xs text-[var(--ink-soft)]">{tab.helper}</p>
             </Link>
           );
         })}
@@ -94,10 +102,13 @@ export default async function Home({ searchParams }) {
       getParam(resolvedSearchParams, "page") ||
       "1",
     weatherTab: getParam(resolvedSearchParams, "weatherTab", "live"),
+    weatherSimTab: getParam(resolvedSearchParams, "weatherSimTab"),
   };
 
   const isWeatherSurface = currentQuery.surface === "weather";
-  const weatherTab = currentQuery.weatherTab === "review" ? "review" : "live";
+  const weatherTab = ["review", "simulation"].includes(currentQuery.weatherTab)
+    ? currentQuery.weatherTab
+    : "live";
   const monitorSnapshot = isWeatherSurface
     ? null
     : getMonitorSnapshot({
@@ -165,7 +176,9 @@ export default async function Home({ searchParams }) {
         {isWeatherSurface ? (
           <>
             <WeatherTabs currentQuery={currentQuery} />
-            {weatherTab === "review" ? <WeatherReviewPanel /> : <WeatherSectionPanel />}
+            {weatherTab === "review" ? <WeatherReviewPanel /> : null}
+            {weatherTab === "simulation" ? <WeatherSimulationPanel currentQuery={currentQuery} /> : null}
+            {weatherTab === "live" ? <WeatherSectionPanel /> : null}
           </>
         ) : (
           <>

@@ -3,26 +3,69 @@
 import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-function clampBaseMultiplier(value) {
+const DEFAULT_CONFIG = {
+  entryLeadMinutes: 60,
+  limitPriceCents: 40,
+  limitShares: 5,
+};
+
+function clampNumber(value, fallback, min, max, decimals = 2) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
-    return 1;
+    return fallback;
   }
-  return Math.min(5, Math.max(1, Math.round(numeric)));
+  const bounded = Math.min(max, Math.max(min, numeric));
+  const factor = 10 ** decimals;
+  return Math.round(bounded * factor) / factor;
 }
 
-const ENTRY_MODE_OPTIONS = [
-  {
-    value: "limit-pair",
-    label: "限价双边",
-    helper: "事件开始前按当前规则挂上下双边限价单。",
-  },
-  {
-    value: "trigger-threshold",
-    label: "40c 触发",
-    helper: "任一方向先到 40c 或以下就按规则下单。",
-  },
-];
+function normalizeConfig(config) {
+  const entryLeadMinutes = clampNumber(
+    config?.entryLeadMinutes,
+    DEFAULT_CONFIG.entryLeadMinutes,
+    1,
+    240,
+    0,
+  );
+  const limitPriceCents = clampNumber(
+    config?.limitPriceCents,
+    DEFAULT_CONFIG.limitPriceCents,
+    1,
+    99,
+    2,
+  );
+  const limitShares = clampNumber(
+    config?.limitShares,
+    DEFAULT_CONFIG.limitShares,
+    0.01,
+    10000,
+    4,
+  );
+  return {
+    entryLeadMinutes,
+    limitPriceCents,
+    limitShares,
+    estimatedOrderUsd: Number(((entryLeadMinutes ? limitPriceCents * limitShares : 0) / 100).toFixed(6)),
+  };
+}
+
+function formatUsd(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "--";
+  }
+  return `$${numeric.toFixed(3)}`;
+}
+
+function serviceLabel(state) {
+  if (state === "running") {
+    return "运行中";
+  }
+  if (state === "partial") {
+    return "部分运行";
+  }
+  return "已暂停";
+}
 
 function statusTone(state) {
   if (state === "running") {
@@ -34,18 +77,41 @@ function statusTone(state) {
   return "border-[rgba(192,49,36,0.24)] bg-[rgba(192,49,36,0.08)] text-[var(--signal-down)]";
 }
 
+function serviceDetail(serviceStatus) {
+  const monitor = serviceStatus?.monitor;
+  const recovery = serviceStatus?.recovery;
+  if (!monitor && !recovery) {
+    return serviceStatus?.detail || "BTC 服务未启动";
+  }
+  const monitorText = `监控 ${monitor?.runningCount ?? 0}/${monitor?.expectedCount ?? 4}`;
+  const recoveryText = recovery?.workerRunning ? "4小时下单已启动" : "4小时下单已暂停";
+  return `${monitorText}，${recoveryText}`;
+}
+
 export function RecoveryControls({ config, serviceStatus }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [entryMode, setEntryMode] = useState(config?.entryMode || "limit-pair");
-  const [baseMultiplier, setBaseMultiplier] = useState(String(config?.baseMultiplier || 1));
+  const [entryLeadMinutes, setEntryLeadMinutes] = useState(String(DEFAULT_CONFIG.entryLeadMinutes));
+  const [limitPriceCents, setLimitPriceCents] = useState(String(DEFAULT_CONFIG.limitPriceCents));
+  const [limitShares, setLimitShares] = useState(String(DEFAULT_CONFIG.limitShares));
   const [pending, setPending] = useState(false);
   const [actionPending, setActionPending] = useState("");
 
   useEffect(() => {
-    setEntryMode(config?.entryMode || "limit-pair");
-    setBaseMultiplier(String(config?.baseMultiplier || 1));
+    const normalized = normalizeConfig(config);
+    setEntryLeadMinutes(String(normalized.entryLeadMinutes));
+    setLimitPriceCents(String(normalized.limitPriceCents));
+    setLimitShares(String(normalized.limitShares));
   }, [config]);
+
+  const currentConfig = normalizeConfig(config);
+  const draftConfig = normalizeConfig({
+    entryLeadMinutes,
+    limitPriceCents,
+    limitShares,
+  });
+  const currentServiceState = serviceStatus?.state || "stopped";
+  const currentServiceLabel = serviceLabel(currentServiceState);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -60,8 +126,9 @@ export function RecoveryControls({ config, serviceStatus }) {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          entryMode,
-          baseMultiplier: clampBaseMultiplier(baseMultiplier),
+          entryLeadMinutes: draftConfig.entryLeadMinutes,
+          limitPriceCents: draftConfig.limitPriceCents,
+          limitShares: draftConfig.limitShares,
         }),
       });
       if (!response.ok) {
@@ -104,14 +171,6 @@ export function RecoveryControls({ config, serviceStatus }) {
     }
   }
 
-  const currentMode =
-    ENTRY_MODE_OPTIONS.find((item) => item.value === (config?.entryMode || "limit-pair")) ||
-    ENTRY_MODE_OPTIONS[0];
-  const currentBaseMultiplier = clampBaseMultiplier(config?.baseMultiplier || 1);
-  const currentServiceState = serviceStatus?.state || "stopped";
-  const currentServiceLabel = serviceStatus?.label || "已暂停";
-  const currentServiceDetail = serviceStatus?.detail || "BTC 服务未启动";
-
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.6rem] border border-[var(--line)] bg-[rgba(255,255,255,0.74)] px-4 py-4">
@@ -122,12 +181,12 @@ export function RecoveryControls({ config, serviceStatus }) {
               {currentServiceLabel}
             </span>
           </div>
-          <div>{currentServiceDetail}</div>
-          <div>当前模式：{currentMode.label}</div>
+          <div>{serviceDetail(serviceStatus)}</div>
           <div>
-            当前倍数：{currentBaseMultiplier} 倍，金额 {config?.baseLegUsd || currentBaseMultiplier} /{" "}
-            {config?.recoveryLegUsd || currentBaseMultiplier * 2}
+            当前配置：开场前 {currentConfig.entryLeadMinutes} 分钟，双边限价{" "}
+            {currentConfig.limitPriceCents}c，每边 {currentConfig.limitShares} 份
           </div>
+          <div>预计单边花费：{formatUsd(currentConfig.estimatedOrderUsd)}</div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -161,9 +220,9 @@ export function RecoveryControls({ config, serviceStatus }) {
           <div className="w-full max-w-xl rounded-[1.8rem] border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.18)]">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="font-display text-2xl font-semibold text-neutral-950">BTC 恢复策略设置</h3>
-                <p className="mt-2 text-sm text-[var(--ink-soft)]">
-                  这里控制 BTC 的下单模式和初始倍数。初始填 1 就是 1 / 2，填 3 就是 3 / 6。
+                <h3 className="font-display text-2xl font-semibold text-neutral-950">4小时限价单设置</h3>
+                <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
+                  这里只控制固定挂单逻辑：到开场前指定时间后，上下两边都挂限价买单；失败由 worker 继续重试。
                 </p>
               </div>
               <button
@@ -176,47 +235,49 @@ export function RecoveryControls({ config, serviceStatus }) {
             </div>
 
             <form className="mt-5 space-y-5" onSubmit={handleSubmit}>
-              <div className="space-y-2">
-                <div className="text-sm text-[var(--ink-soft)]">下单模式</div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {ENTRY_MODE_OPTIONS.map((item) => {
-                    const active = entryMode === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setEntryMode(item.value)}
-                        className={`rounded-[1.4rem] border px-4 py-4 text-left transition ${
-                          active
-                            ? "border-[var(--accent-strong)] bg-[rgba(212,126,57,0.12)]"
-                            : "border-[var(--line)] bg-white hover:border-[var(--accent-strong)]"
-                        }`}
-                      >
-                        <div className="text-base font-semibold text-neutral-950">{item.label}</div>
-                        <div className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.helper}</div>
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <label className="block">
+                  <span className="text-sm text-[var(--ink-soft)]">开场前分钟</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="240"
+                    step="1"
+                    value={entryLeadMinutes}
+                    onChange={(event) => setEntryLeadMinutes(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-[var(--line)] bg-white px-4 py-3 text-base text-neutral-950 outline-none transition focus:border-[var(--accent-strong)]"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-[var(--ink-soft)]">限价价格 c</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="99"
+                    step="0.1"
+                    value={limitPriceCents}
+                    onChange={(event) => setLimitPriceCents(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-[var(--line)] bg-white px-4 py-3 text-base text-neutral-950 outline-none transition focus:border-[var(--accent-strong)]"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-[var(--ink-soft)]">每边份额</span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={limitShares}
+                    onChange={(event) => setLimitShares(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-[var(--line)] bg-white px-4 py-3 text-base text-neutral-950 outline-none transition focus:border-[var(--accent-strong)]"
+                  />
+                </label>
               </div>
 
-              <label className="block">
-                <span className="text-sm text-[var(--ink-soft)]">初始倍数</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="5"
-                  step="1"
-                  value={baseMultiplier}
-                  onChange={(event) => setBaseMultiplier(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-[var(--line)] bg-white px-4 py-3 text-base text-neutral-950 outline-none transition focus:border-[var(--accent-strong)]"
-                />
-              </label>
-
-              <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                保存后会按 {clampBaseMultiplier(baseMultiplier)} / {clampBaseMultiplier(baseMultiplier) * 2} 运行。
-                连亏触发恢复后保持第二档，直到该轮累计收益转正，再回到第一档。
-              </p>
+              <div className="rounded-[1.4rem] border border-[var(--line)] bg-white/70 px-4 py-4 text-sm leading-6 text-[var(--ink-soft)]">
+                保存后配置：开场前 {draftConfig.entryLeadMinutes} 分钟开始，价格 {draftConfig.limitPriceCents}c，
+                每边 {draftConfig.limitShares} 份；单边预计 {formatUsd(draftConfig.estimatedOrderUsd)}，
+                双边预计 {formatUsd(draftConfig.estimatedOrderUsd * 2)}。
+              </div>
 
               <div className="flex justify-end gap-3">
                 <button

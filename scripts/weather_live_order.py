@@ -16,9 +16,20 @@ LIVE_ORDERS_PATH = DATA_DIR / "live-orders.json"
 WEATHER_CONFIG_PATH = DATA_DIR / "config.json"
 TZ = ZoneInfo("Asia/Shanghai")
 STRATEGY_ID = "weather-live-125"
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
 CAPTURE_SLOT_ID = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_ID", "00")
 CAPTURE_SLOT_LABEL = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_LABEL", "00:10")
-MAX_PRICE_CAP = float(os.getenv("WEATHER_LIVE_MAX_PRICE_CAP", "0.9"))
+MAX_PRICE_CAP = env_float("WEATHER_LIVE_MAX_PRICE_CAP", 0.9)
+MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.95)
+HIGH_PRICE_SKIP_REASON = f"no-price-above-{MAX_NO_PRICE:.2f}"
 USE_MAX_PRICE_CAP = str(os.getenv("WEATHER_LIVE_USE_MAX_PRICE_CAP", "true")).strip().lower() in {
     "1",
     "true",
@@ -30,6 +41,24 @@ MAX_ORDER_ATTEMPTS = max(1, int(os.getenv("WEATHER_LIVE_MAX_ORDER_ATTEMPTS", "28
 ORDER_RETRY_AFTER_SECONDS = float(os.getenv("WEATHER_LIVE_RETRY_AFTER_SECONDS", "300"))
 ORDER_RETRY_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_ORDER_RETRY_WAIT_SECONDS", "3"))
 MIN_SUCCESS_SHARES = float(os.getenv("WEATHER_LIVE_MIN_SUCCESS_SHARES", "0.000001"))
+RETRY_FAILED_ORDERS = str(os.getenv("WEATHER_LIVE_RETRY_FAILED_ORDERS", "true")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RETRYABLE_FAILED_ERROR_MARKERS = (
+    "order_version_mismatch",
+    "collateral balance",
+    "request exception",
+    "500 server error",
+    "internal server error",
+    "server error",
+    "service not ready",
+    "timeout",
+    "connection",
+    "temporarily",
+)
 
 
 if "--dry-run" in sys.argv:
@@ -174,7 +203,7 @@ def last_attempt_at(record: Dict[str, Any]) -> Optional[datetime]:
         parsed = parse_iso_datetime(last_attempt.get("attemptedAt"))
         if parsed:
             return parsed
-    for key in ("lastAttemptAt", "placedAt"):
+    for key in ("lastAttemptAt", "failedAt", "placedAt"):
         parsed = parse_iso_datetime(record.get(key))
         if parsed:
             return parsed
@@ -202,9 +231,24 @@ def has_confirmed_fill(record: Dict[str, Any]) -> bool:
     return fill_status == "position-detected" and cost > 0 and shares > MIN_SUCCESS_SHARES
 
 
+def is_high_price_blocked(record: Dict[str, Any]) -> bool:
+    return (
+        str(record.get("fillStatus") or "").lower() == "price-above-limit"
+        or str(record.get("skipReason") or "") == HIGH_PRICE_SKIP_REASON
+    )
+
+
 def is_retryable_unconfirmed_order(record: Dict[str, Any]) -> bool:
+    if is_high_price_blocked(record):
+        return False
     status = str(record.get("status") or "").lower()
-    if status not in {"pending", "placing", "no-fill"}:
+    if status == "failed":
+        if not RETRY_FAILED_ORDERS:
+            return False
+        error_text = str(record.get("error") or "").lower()
+        if not any(marker in error_text for marker in RETRYABLE_FAILED_ERROR_MARKERS):
+            return False
+    elif status not in {"pending", "placing", "no-fill"}:
         return False
     if has_confirmed_fill(record):
         return False
@@ -333,6 +377,12 @@ def response_order_id(response: Any) -> Optional[str]:
     return None
 
 
+def has_any_order_id(record: Dict[str, Any]) -> bool:
+    if record.get("orderId"):
+        return True
+    return any(bool(item) for item in (record.get("orderIds") or []))
+
+
 def to_jsonable(value: Any):
     try:
         json.dumps(value)
@@ -406,6 +456,62 @@ def build_live_record(
     return record
 
 
+def build_high_price_skip_record(
+    source: Dict[str, Any],
+    existing_record: Optional[Dict[str, Any]],
+    stake: Dict[str, Any],
+    token_id: str,
+    current_no_price: float,
+    price_cap: float,
+) -> Dict[str, Any]:
+    record = dict(existing_record) if existing_record else build_live_record(
+        source,
+        stake,
+        token_id,
+        current_no_price,
+        price_cap,
+        0.0,
+    )
+    has_submitted_order = has_any_order_id(record)
+    record.update(
+        {
+            "strategyLabel": STRATEGY_LABEL,
+            "tokenId": token_id,
+            "buyNoPrice": current_no_price,
+            "recordedBuyNoPrice": source.get("buyNoPrice"),
+            "priceCap": price_cap,
+            "requestedStakeUsd": stake["stakeUsd"],
+            "estimatedShares": round_money(float(stake["stakeUsd"]) / float(current_no_price), 6),
+            "estimatedNoWinPayoutUsd": round_money(float(stake["stakeUsd"]) / float(current_no_price), 6),
+            "estimatedNoWinPnlUsd": round_money(
+                float(stake["stakeUsd"]) / float(current_no_price) - float(stake["stakeUsd"]),
+                6,
+            ),
+            "progressiveStepIndex": stake["stepIndex"],
+            "progressiveLossStreakBefore": stake["lossStreakBefore"],
+            "progressiveCyclePnlBefore": stake.get("cyclePnlBefore"),
+            "fillStatus": "price-above-limit",
+            "skipReason": HIGH_PRICE_SKIP_REASON,
+            "skipLimitNoPrice": MAX_NO_PRICE,
+            "skippedAt": now_iso(),
+            "result": "price-above-limit",
+        }
+    )
+    if has_submitted_order:
+        record["status"] = "pending"
+    else:
+        record.update(
+            {
+                "status": "skipped",
+                "stakeUsd": 0,
+                "spentUsd": 0,
+                "sharesBought": 0,
+            }
+        )
+    record["key"] = order_key(record)
+    return record
+
+
 def main() -> int:
     target_date = today_ymd()
     weather_records = read_json(WEATHER_RECORDS_PATH, [])
@@ -424,6 +530,7 @@ def main() -> int:
         and item.get("eventSlug")
         and str(item.get("status") or "").lower() != "resolved"
         and float(item.get("buyNoPrice") or 0) < 1
+        and float(item.get("buyNoPrice") or 0) <= MAX_NO_PRICE
     ]
     candidates.sort(key=lambda item: str(item.get("cityZh") or item.get("citySlug") or ""))
     if not candidates:
@@ -476,6 +583,23 @@ def main() -> int:
                 price_cap = min(MAX_PRICE_CAP, max(float(current_no_price), float(source.get("buyNoPrice") or 0)))
             if price_cap <= 0:
                 raise RuntimeError("invalid price cap")
+            if float(current_no_price) > MAX_NO_PRICE:
+                live_record = build_high_price_skip_record(
+                    source,
+                    existing_record,
+                    stake,
+                    token["tokenId"],
+                    float(current_no_price),
+                    price_cap,
+                )
+                upsert_live_order(live_orders, live_record)
+                write_json(LIVE_ORDERS_PATH, live_orders)
+                print(
+                    f"SKIP high-price {city} No current={float(current_no_price):.3f} "
+                    f"limit={MAX_NO_PRICE:.3f}"
+                )
+                results.append({"city": city, "status": "skipped-price"})
+                continue
 
             baseline = float(trader.get_position_size(token["tokenId"]) or 0.0)
             if existing_record:
@@ -642,7 +766,7 @@ def main() -> int:
 
     bought = sum(1 for item in results if item["status"] == "pending")
     failed = sum(1 for item in results if item["status"] == "failed")
-    skipped = sum(1 for item in results if item["status"] == "skipped-existing")
+    skipped = sum(1 for item in results if item["status"] in {"skipped-existing", "skipped-price"})
     print(f"SUMMARY date={target_date} bought={bought} failed={failed} skipped={skipped}")
     return 0 if failed == 0 else 2
 
