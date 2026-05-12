@@ -76,7 +76,6 @@ run-monitor.bat
 可单独启动某个周期：
 
 ```bash
-npm run monitor:5m
 npm run monitor:15m
 npm run monitor:1h
 npm run monitor:4h

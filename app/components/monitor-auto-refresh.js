@@ -4,7 +4,6 @@ import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const REFRESH_INTERVALS = {
-  "5m": 5000,
   "15m": 5000,
   "1h": 60000,
   "4h": 120000,

@@ -33,15 +33,6 @@ const variants = [
       SAMPLE_INTERVAL_MS: '5000',
     },
   },
-  {
-    label: '5M',
-    env: {
-      MONITOR_VARIANT: '5m',
-      MONITOR_WINDOW_HOURS: '0.0833333333',
-      MONITOR_WINDOW_MINUTES: '5',
-      SAMPLE_INTERVAL_MS: '3000',
-    },
-  },
 ];
 
 const children = [];

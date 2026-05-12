@@ -37,3 +37,9 @@
 - `order_recovery.py` had a single `activeEvent` slot that was used for both the current order lifecycle and old-event settlement.
 - When one 4h event was still active or waiting to resolve, the next event's 1-hour prestart window was skipped because `maybe_start_current_event()` was only called when `activeEvent` was empty.
 - Required behavior is event-independent: each event must get its own fixed Up/Down limit orders, while previous events can remain pending for settlement.
+
+## Weather Rotation Simulation Requirements
+- Keep the current weather live ordering and current weather page behavior unchanged.
+- Add a separate simulated strategy that first models overseas weather orders around 18:00 Beijing time, then domestic weather orders around 06:00 Beijing time after overseas results are expected.
+- The simulation must not place real orders or write to live weather order records.
+- Domestic and overseas legs should be one combined rotation strategy for reporting, but separate from the existing live strategy.

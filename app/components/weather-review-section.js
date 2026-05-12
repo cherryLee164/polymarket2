@@ -1,4 +1,5 @@
 import { getWeatherDashboardSnapshot } from "@/lib/weather-trading-data";
+import { HydrationStable } from "@/app/components/hydration-stable";
 
 function formatMoney(value, digits = 3) {
   const numeric = Number(value);
@@ -307,6 +308,18 @@ function CityTemperatureStrips({ review }) {
   );
 }
 
+function WeatherReviewFallback() {
+  return (
+    <div className="space-y-6">
+      <section className="rounded-[1.8rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5 shadow-[var(--shadow)]">
+        <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Weather Review</p>
+        <h3 className="mt-3 text-xl font-semibold text-neutral-950">天气复盘数据加载中</h3>
+        <p className="mt-2 text-sm text-[var(--ink-soft)]">正在读取本地快照，避免实时写入数据造成页面首屏不一致。</p>
+      </section>
+    </div>
+  );
+}
+
 export async function WeatherReviewPanel() {
   const snapshot = await getWeatherDashboardSnapshot({ sync: false });
   const liveSummary = snapshot.liveOrders?.summary || {};
@@ -326,7 +339,8 @@ export async function WeatherReviewPanel() {
   });
 
   return (
-    <div className="space-y-6">
+    <HydrationStable fallback={<WeatherReviewFallback />}>
+      <div className="space-y-6">
       <section className="grid gap-4 lg:grid-cols-4">
         <MetricCard label="实盘总收益" value={liveOverall.netPnlUsd} helper="按预收益 / 投注额口径" />
         <MetricCard label="当天收益" value={liveToday.netPnlUsd} helper={formatDate(snapshot.localDate)} />
@@ -347,6 +361,7 @@ export async function WeatherReviewPanel() {
       <PositiveDriftRanking rows={review.positiveOver3Ranking || []} dayCount={review.summary?.dayCount || 7} />
       <YesterdayLossCities data={yesterdayLossCities} />
       <CityTemperatureStrips review={review} />
-    </div>
+      </div>
+    </HydrationStable>
   );
 }

@@ -67,3 +67,7 @@
 - Removed the old running-path concepts for 4h: realized PnL, recovery mode, loss streak, settlement, half-window deadline, external-position blocking, top-up, and single-side guard cancellation.
 - Restarted `order_recovery_launcher.js`; new launcher PID `27136`, new 4h worker PID `25684`.
 - New runtime is reset to `version=1`, active event `btc-updown-4h-1777550400`, entry opens at `2026-04-30T11:00:00+00:00`, no trades submitted yet.
+
+## Weather Rotation Simulation
+- Started a standalone simulation task for overseas 18:00 BJT and domestic next-day 06:00 BJT weather rotation.
+- User explicitly required existing weather/live behavior to remain untouched.

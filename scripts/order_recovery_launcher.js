@@ -66,7 +66,6 @@ function envEnabled(name, fallback = true) {
 }
 
 const variants = [
-  { id: "1h", label: "1H-RECOVERY", enabled: envEnabled("RECOVERY_1H_ENABLED", true) },
   { id: "4h", label: "4H-RECOVERY", enabled: envEnabled("RECOVERY_4H_ENABLED", true) },
 ].filter((variant) => variant.enabled);
 

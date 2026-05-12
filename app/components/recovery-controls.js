@@ -84,7 +84,14 @@ function serviceDetail(serviceStatus) {
     return serviceStatus?.detail || "BTC 服务未启动";
   }
   const monitorText = `监控 ${monitor?.runningCount ?? 0}/${monitor?.expectedCount ?? 4}`;
-  const recoveryText = recovery?.workerRunning ? "4小时下单已启动" : "4小时下单已暂停";
+  let recoveryText = "4小时下单未启动";
+  if (recovery?.workerRunning) {
+    recoveryText = "4小时下单已启动";
+  } else if (recovery?.launcherRunning) {
+    recoveryText = "4小时下单启动中";
+  } else if (recovery?.manualPaused) {
+    recoveryText = "4小时下单已手动暂停";
+  }
   return `${monitorText}，${recoveryText}`;
 }
 
@@ -96,6 +103,7 @@ export function RecoveryControls({ config, serviceStatus }) {
   const [limitShares, setLimitShares] = useState(String(DEFAULT_CONFIG.limitShares));
   const [pending, setPending] = useState(false);
   const [actionPending, setActionPending] = useState("");
+  const [localServiceStatus, setLocalServiceStatus] = useState(serviceStatus);
 
   useEffect(() => {
     const normalized = normalizeConfig(config);
@@ -104,14 +112,29 @@ export function RecoveryControls({ config, serviceStatus }) {
     setLimitShares(String(normalized.limitShares));
   }, [config]);
 
+  useEffect(() => {
+    setLocalServiceStatus(serviceStatus);
+  }, [serviceStatus]);
+
   const currentConfig = normalizeConfig(config);
   const draftConfig = normalizeConfig({
     entryLeadMinutes,
     limitPriceCents,
     limitShares,
   });
-  const currentServiceState = serviceStatus?.state || "stopped";
-  const currentServiceLabel = serviceLabel(currentServiceState);
+  const recoveryStatus = localServiceStatus?.recovery || {};
+  const orderWorkerRunning = Boolean(recoveryStatus.workerRunning);
+  const orderLauncherRunning = Boolean(recoveryStatus.launcherRunning);
+  const orderActive = orderWorkerRunning || orderLauncherRunning;
+  const orderManualPaused = Boolean(recoveryStatus.manualPaused);
+  const currentServiceState = orderActive ? "running" : "stopped";
+  const currentServiceLabel = orderWorkerRunning
+    ? "下单运行中"
+    : orderLauncherRunning
+      ? "下单启动中"
+      : orderManualPaused
+        ? "下单已暂停"
+        : serviceLabel(currentServiceState);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -161,6 +184,10 @@ export function RecoveryControls({ config, serviceStatus }) {
       if (!response.ok) {
         throw new Error(`recovery-service-${action}-failed`);
       }
+      const payload = await response.json().catch(() => null);
+      if (payload?.serviceStatus) {
+        setLocalServiceStatus(payload.serviceStatus);
+      }
       startTransition(() => {
         router.refresh();
       });
@@ -181,7 +208,7 @@ export function RecoveryControls({ config, serviceStatus }) {
               {currentServiceLabel}
             </span>
           </div>
-          <div>{serviceDetail(serviceStatus)}</div>
+          <div>{serviceDetail(localServiceStatus)}</div>
           <div>
             当前配置：开场前 {currentConfig.entryLeadMinutes} 分钟，双边限价{" "}
             {currentConfig.limitPriceCents}c，每边 {currentConfig.limitShares} 份
@@ -192,7 +219,7 @@ export function RecoveryControls({ config, serviceStatus }) {
           <button
             type="button"
             onClick={() => handleServiceAction("start")}
-            disabled={Boolean(actionPending) || currentServiceState === "running"}
+            disabled={Boolean(actionPending) || orderActive}
             className="rounded-full border border-[rgba(31,139,94,0.28)] bg-[rgba(31,139,94,0.10)] px-4 py-2 text-sm font-semibold text-[var(--signal-up)] transition disabled:cursor-not-allowed disabled:opacity-60"
           >
             {actionPending === "start" ? "启动中..." : "启动"}
@@ -200,7 +227,7 @@ export function RecoveryControls({ config, serviceStatus }) {
           <button
             type="button"
             onClick={() => handleServiceAction("stop")}
-            disabled={Boolean(actionPending) || currentServiceState === "stopped"}
+            disabled={Boolean(actionPending) || !orderActive}
             className="rounded-full border border-[rgba(192,49,36,0.24)] bg-[rgba(192,49,36,0.08)] px-4 py-2 text-sm font-semibold text-[var(--signal-down)] transition disabled:cursor-not-allowed disabled:opacity-60"
           >
             {actionPending === "stop" ? "暂停中..." : "暂停"}

@@ -44,3 +44,14 @@ Rewrite BTC auto-order logic only, leave weather unchanged, reset BTC to a clean
 - [completed] Replace it with a fixed 4h limit-order worker only.
 - [completed] Remove 4h PnL/recovery/settlement/half-window/single-side-guard behavior from the running path.
 - [completed] Restart the worker and confirm new runtime/reports are reset.
+
+## Current Task: Weather Rotation Simulation
+- [completed] Inspect existing weather simulation/data structure without changing live weather.
+- [completed] Add standalone domestic+overseas rotation simulation data model and generator.
+- [completed] Add standalone UI/report entry for rotation simulation.
+- [completed] Verify with syntax/lint and snapshot output.
+
+## Guardrails
+- Do not modify current weather live ordering behavior.
+- Do not modify current weather live records except through a new simulation file.
+- Do not place or cancel any real orders for this simulation task.

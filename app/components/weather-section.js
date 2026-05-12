@@ -1,4 +1,5 @@
 import { getWeatherDashboardSnapshot } from "@/lib/weather-trading-data";
+import { HydrationStable } from "@/app/components/hydration-stable";
 import { WeatherLiveControls } from "@/app/components/weather-live-controls";
 
 const DISPLAY_TIME_ZONE = "Asia/Shanghai";
@@ -72,6 +73,16 @@ function getWeatherResultPnlUsd(row) {
 }
 
 function estimateNoWinPnlUsd(row) {
+  const actualCost = Number(row?.actualBuyCostUsd);
+  const actualShares = Number(row?.actualBuyShares);
+  if (
+    Number.isFinite(actualCost) &&
+    actualCost > 0 &&
+    Number.isFinite(actualShares) &&
+    actualShares > 0
+  ) {
+    return Number((actualShares - actualCost).toFixed(6));
+  }
   const existing = Number(row?.estimatedNoWinPnlUsd);
   if (Number.isFinite(existing)) {
     return existing;
@@ -321,8 +332,8 @@ function LiveRecordTable({ title, rows }) {
                     <div className="text-base font-semibold text-neutral-950">{getLiveStatusLabel(row)}</div>
                     <div className="mt-1 text-sm text-[var(--ink-soft)]">{getLiveStatusDetail(row)}</div>
                   </td>
-                  <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(row.estimatedNoWinPnlUsd)}`}>
-                    {formatMoney(row.estimatedNoWinPnlUsd)}
+                  <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(estimateNoWinPnlUsd(row))}`}>
+                    {formatMoney(estimateNoWinPnlUsd(row))}
                   </td>
                   <td className={`px-5 py-4 text-base font-semibold ${renderPnlClass(getWeatherResultPnlUsd(row))}`}>
                     {row.status === "pending" ? "--" : formatMoney(getWeatherResultPnlUsd(row))}
@@ -343,6 +354,18 @@ function LiveRecordTable({ title, rows }) {
   );
 }
 
+function WeatherLiveFallback() {
+  return (
+    <div className="space-y-6">
+      <section className="rounded-[1.8rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5 shadow-[var(--shadow)]">
+        <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Weather Live</p>
+        <h3 className="mt-3 text-xl font-semibold text-neutral-950">天气实盘数据加载中</h3>
+        <p className="mt-2 text-sm text-[var(--ink-soft)]">正在读取本地快照，避免实时写入数据造成页面首屏不一致。</p>
+      </section>
+    </div>
+  );
+}
+
 export async function WeatherSectionPanel() {
   const snapshot = await getWeatherDashboardSnapshot({ sync: false });
   const liveOrders = snapshot.liveOrders || {};
@@ -355,7 +378,8 @@ export async function WeatherSectionPanel() {
   const dailyBreakdown = liveSevenDay.dailyBreakdown || [];
 
   return (
-    <div className="space-y-6">
+    <HydrationStable fallback={<WeatherLiveFallback />}>
+      <div className="space-y-6">
       <section className="overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,246,224,0.92))] shadow-[var(--shadow)]">
         <div className="flex flex-col gap-4 p-4 lg:p-5">
           <div className="grid gap-3 md:grid-cols-3">
@@ -390,6 +414,7 @@ export async function WeatherSectionPanel() {
       </section>
 
       <LiveRecordTable title={`${formatDate(snapshot.localDate)} 实盘明细`} rows={todayLiveRecords} />
-    </div>
+      </div>
+    </HydrationStable>
   );
 }

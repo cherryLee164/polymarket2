@@ -2,7 +2,6 @@ import Link from "next/link";
 
 const MONITOR_THRESHOLDS = [45, 40, 35, 30];
 const MONITOR_VARIANT_TABS = [
-  { id: "5m", label: "5M 监控" },
   { id: "15m", label: "15M 监控" },
   { id: "1h", label: "1H 监控" },
   { id: "4h", label: "4H 监控" },

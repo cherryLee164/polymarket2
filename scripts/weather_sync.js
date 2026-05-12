@@ -143,6 +143,26 @@ function orderAttemptCount(record) {
   return record?.orderId ? 1 : 0;
 }
 
+function hasSubmittedLiveOrder(record) {
+  if (record?.orderId) {
+    return true;
+  }
+  if (Array.isArray(record?.orderIds) && record.orderIds.some(Boolean)) {
+    return true;
+  }
+  const attempts = Array.isArray(record?.orderAttempts) ? record.orderAttempts : [];
+  return attempts.some((attempt) => {
+    const response =
+      attempt?.response && typeof attempt.response === "object" ? attempt.response : {};
+    return Boolean(
+      attempt?.orderId ||
+        response.orderID ||
+        response.orderId ||
+        response.success === true
+    );
+  });
+}
+
 function lastAttemptTime(record) {
   const attempts = Array.isArray(record?.orderAttempts) ? record.orderAttempts : [];
   const lastAttempt = attempts.length > 0 ? attempts[attempts.length - 1] : null;
@@ -183,6 +203,9 @@ function isRetryableUnconfirmedLiveOrder(record, localDate) {
     return false;
   }
   if (hasConfirmedLiveFill(record)) {
+    return false;
+  }
+  if (hasSubmittedLiveOrder(record)) {
     return false;
   }
   if (

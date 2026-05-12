@@ -27,7 +27,7 @@ def env_float(name: str, default: float) -> float:
 
 CAPTURE_SLOT_ID = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_ID", "00")
 CAPTURE_SLOT_LABEL = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_LABEL", "00:10")
-MAX_PRICE_CAP = env_float("WEATHER_LIVE_MAX_PRICE_CAP", 0.9)
+MAX_PRICE_CAP = env_float("WEATHER_LIVE_MAX_PRICE_CAP", 0.95)
 MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.95)
 HIGH_PRICE_SKIP_REASON = f"no-price-above-{MAX_NO_PRICE:.2f}"
 USE_MAX_PRICE_CAP = str(os.getenv("WEATHER_LIVE_USE_MAX_PRICE_CAP", "true")).strip().lower() in {
@@ -128,11 +128,14 @@ def read_live_stake_settings() -> Dict[str, Any]:
             except Exception:
                 continue
         sequence = parsed or [1.0, 2.0, 2.0, 3.0, 5.0]
+        base = normalize_base_stake(sequence[0] if sequence else 1)
     else:
         config = read_json(WEATHER_CONFIG_PATH, {})
-        sequence = build_stake_sequence(config.get("liveBaseStake"))
+        base = normalize_base_stake(config.get("liveBaseStake"))
+        sequence = build_stake_sequence(base)
 
     return {
+        "base": base,
         "sequence": sequence,
         "label": format_stake_sequence(sequence),
     }
@@ -155,6 +158,7 @@ def as_float(value: Any, default: float = 0.0) -> float:
 
 
 LIVE_STAKE_SETTINGS = read_live_stake_settings()
+CONFIGURED_BASE_STAKE_USD = float(LIVE_STAKE_SETTINGS.get("base") or 1)
 STAKE_SEQUENCE = LIVE_STAKE_SETTINGS["sequence"]
 BASE_STAKE_USD = STAKE_SEQUENCE[0] if STAKE_SEQUENCE else 1.0
 STRATEGY_LABEL = f"天气实盘同城 {LIVE_STAKE_SETTINGS['label']}"
@@ -194,6 +198,31 @@ def order_attempt_count(record: Dict[str, Any]) -> int:
     if isinstance(attempts, list) and attempts:
         return len(attempts)
     return 1 if record.get("orderId") else 0
+
+
+def has_submitted_order(record: Dict[str, Any]) -> bool:
+    if record.get("orderId"):
+        return True
+    order_ids = record.get("orderIds")
+    if isinstance(order_ids, list) and any(order_ids):
+        return True
+    attempts = record.get("orderAttempts")
+    if not isinstance(attempts, list):
+        return False
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        response = attempt.get("response")
+        if not isinstance(response, dict):
+            response = {}
+        if (
+            attempt.get("orderId")
+            or response.get("orderID")
+            or response.get("orderId")
+            or response.get("success") is True
+        ):
+            return True
+    return False
 
 
 def last_attempt_at(record: Dict[str, Any]) -> Optional[datetime]:
@@ -252,6 +281,8 @@ def is_retryable_unconfirmed_order(record: Dict[str, Any]) -> bool:
         return False
     if has_confirmed_fill(record):
         return False
+    if has_submitted_order(record):
+        return False
     if order_attempt_count(record) >= MAX_ORDER_ATTEMPTS:
         return False
     attempted_at = last_attempt_at(record)
@@ -270,7 +301,7 @@ def upsert_live_order(live_orders: List[Dict[str, Any]], record: Dict[str, Any])
 
 
 def accounting_stake_usd(record: Dict[str, Any]) -> float:
-    for key in ("requestedStakeUsd", "stakeUsd", "actualBuyCostUsd"):
+    for key in ("actualBuyCostUsd", "stakeUsd", "requestedStakeUsd"):
         value = as_float(record.get(key))
         if value > 0:
             return value
@@ -278,6 +309,10 @@ def accounting_stake_usd(record: Dict[str, Any]) -> float:
 
 
 def estimated_no_win_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    actual_cost = as_float(record.get("actualBuyCostUsd"))
+    actual_shares = as_float(record.get("actualBuyShares"))
+    if actual_cost > 0 and actual_shares > MIN_SUCCESS_SHARES:
+        return round_money(actual_shares - actual_cost, 6)
     existing = record.get("estimatedNoWinPnlUsd")
     if existing not in (None, ""):
         return round_money(existing, 6)
@@ -310,7 +345,7 @@ def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def compute_city_stake(city_slug: str, live_orders: List[Dict[str, Any]], target_date: str) -> Dict[str, Any]:
+def compute_city_progression(city_slug: str, live_orders: List[Dict[str, Any]], target_date: str) -> Dict[str, Any]:
     city_rows = [
         item
         for item in live_orders
@@ -334,12 +369,101 @@ def compute_city_stake(city_slug: str, live_orders: List[Dict[str, Any]], target
             cycle_pnl += day_pnl
             step_index = min(step_index + 1, len(STAKE_SEQUENCE) - 1)
 
-    stake_usd = STAKE_SEQUENCE[step_index] if STAKE_SEQUENCE else BASE_STAKE_USD
     return {
-        "stakeUsd": round_money(stake_usd, 6),
         "stepIndex": step_index,
         "lossStreakBefore": step_index,
         "cyclePnlBefore": round_money(cycle_pnl, 6) or 0,
+    }
+
+
+def normalize_sequence(sequence: Any) -> List[float]:
+    if not isinstance(sequence, list):
+        return [BASE_STAKE_USD]
+    normalized = []
+    for item in sequence:
+        numeric = as_float(item)
+        if numeric > 0:
+            normalized.append(float(numeric))
+    return normalized or [BASE_STAKE_USD]
+
+
+def compute_city_stake(
+    city_slug: str,
+    live_orders: List[Dict[str, Any]],
+    target_date: str,
+    stake_plan: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    progression = compute_city_progression(city_slug, live_orders, target_date)
+    sequence = normalize_sequence((stake_plan or {}).get("sequence") if stake_plan else STAKE_SEQUENCE)
+    step_index = min(int(progression["stepIndex"]), len(sequence) - 1)
+    stake_usd = sequence[step_index]
+    context = stake_plan or {}
+    return {
+        "stakeUsd": round_money(stake_usd, 6),
+        "stepIndex": step_index,
+        "lossStreakBefore": progression["lossStreakBefore"],
+        "cyclePnlBefore": progression["cyclePnlBefore"],
+        "configuredBaseStakeUsd": context.get("configuredBaseStakeUsd", CONFIGURED_BASE_STAKE_USD),
+        "effectiveBaseStakeUsd": context.get("effectiveBaseStakeUsd", BASE_STAKE_USD),
+        "configuredStakeSequenceLabel": context.get("configuredSequenceLabel", LIVE_STAKE_SETTINGS["label"]),
+        "effectiveStakeSequenceLabel": context.get("effectiveSequenceLabel", format_stake_sequence(sequence)),
+        "plannedStakeTotalUsd": context.get("requiredStakeUsd"),
+        "availableBalanceUsd": context.get("balanceUsd"),
+        "stakeDowngradedByBalance": bool(context.get("downgraded")),
+        "stakeDowngradeReason": context.get("downgradeReason"),
+    }
+
+
+def build_balance_aware_stake_plan(
+    candidates: List[Dict[str, Any]],
+    live_orders: List[Dict[str, Any]],
+    existing_by_key: Dict[str, Dict[str, Any]],
+    target_date: str,
+    balance_usd: float,
+) -> Dict[str, Any]:
+    configured_base = normalize_base_stake(CONFIGURED_BASE_STAKE_USD)
+    planned_entries = []
+    for source in candidates:
+        existing_record = existing_by_key.get(order_key(source))
+        if existing_record and has_confirmed_fill(existing_record):
+            continue
+        if existing_record and not is_retryable_unconfirmed_order(existing_record):
+            continue
+        progression = compute_city_progression(str(source.get("citySlug")), live_orders, target_date)
+        planned_entries.append({"stepIndex": int(progression["stepIndex"])})
+
+    base_one_sequence = build_stake_sequence(1)
+    base_one_required = round(
+        sum(base_one_sequence[min(entry["stepIndex"], len(base_one_sequence) - 1)] for entry in planned_entries),
+        6,
+    )
+    if not planned_entries:
+        effective_base = configured_base
+    elif base_one_required <= 0:
+        effective_base = 1
+    elif balance_usd == float("inf"):
+        effective_base = configured_base
+    else:
+        affordable_base = int(float(balance_usd) // base_one_required)
+        effective_base = max(1, min(configured_base, affordable_base))
+
+    effective_sequence = build_stake_sequence(effective_base)
+    configured_sequence = build_stake_sequence(configured_base)
+    required_stake = round(base_one_required * effective_base, 6)
+    downgraded = effective_base < configured_base
+    return {
+        "configuredBaseStakeUsd": float(configured_base),
+        "effectiveBaseStakeUsd": float(effective_base),
+        "configuredSequence": configured_sequence,
+        "sequence": effective_sequence,
+        "configuredSequenceLabel": format_stake_sequence(configured_sequence),
+        "effectiveSequenceLabel": format_stake_sequence(effective_sequence),
+        "balanceUsd": round_money(balance_usd, 6) if balance_usd != float("inf") else None,
+        "baseOneRequiredStakeUsd": base_one_required,
+        "requiredStakeUsd": required_stake,
+        "plannedOrderCount": len(planned_entries),
+        "downgraded": downgraded,
+        "downgradeReason": "balance-insufficient-for-configured-base" if downgraded else None,
     }
 
 
@@ -446,6 +570,14 @@ def build_live_record(
         "progressiveStepIndex": stake["stepIndex"],
         "progressiveLossStreakBefore": stake["lossStreakBefore"],
         "progressiveCyclePnlBefore": stake.get("cyclePnlBefore"),
+        "configuredBaseStakeUsd": stake.get("configuredBaseStakeUsd"),
+        "effectiveBaseStakeUsd": stake.get("effectiveBaseStakeUsd"),
+        "configuredStakeSequenceLabel": stake.get("configuredStakeSequenceLabel"),
+        "effectiveStakeSequenceLabel": stake.get("effectiveStakeSequenceLabel"),
+        "plannedStakeTotalUsd": stake.get("plannedStakeTotalUsd"),
+        "availableBalanceUsd": stake.get("availableBalanceUsd"),
+        "stakeDowngradedByBalance": stake.get("stakeDowngradedByBalance"),
+        "stakeDowngradeReason": stake.get("stakeDowngradeReason"),
         "status": "placing",
         "result": "待结算",
         "payoutUsd": None,
@@ -490,6 +622,14 @@ def build_high_price_skip_record(
             "progressiveStepIndex": stake["stepIndex"],
             "progressiveLossStreakBefore": stake["lossStreakBefore"],
             "progressiveCyclePnlBefore": stake.get("cyclePnlBefore"),
+            "configuredBaseStakeUsd": stake.get("configuredBaseStakeUsd"),
+            "effectiveBaseStakeUsd": stake.get("effectiveBaseStakeUsd"),
+            "configuredStakeSequenceLabel": stake.get("configuredStakeSequenceLabel"),
+            "effectiveStakeSequenceLabel": stake.get("effectiveStakeSequenceLabel"),
+            "plannedStakeTotalUsd": stake.get("plannedStakeTotalUsd"),
+            "availableBalanceUsd": stake.get("availableBalanceUsd"),
+            "stakeDowngradedByBalance": stake.get("stakeDowngradedByBalance"),
+            "stakeDowngradeReason": stake.get("stakeDowngradeReason"),
             "fillStatus": "price-above-limit",
             "skipReason": HIGH_PRICE_SKIP_REASON,
             "skipLimitNoPrice": MAX_NO_PRICE,
@@ -545,6 +685,18 @@ def main() -> int:
 
     trader = order_engine.create_trader()
     trader.initialize()
+    balance_status = trader.get_balance_status()
+    balance_usd = float(balance_status.get("balance") or 0.0)
+    stake_plan = build_balance_aware_stake_plan(candidates, live_orders, existing_by_key, target_date, balance_usd)
+    print(
+        "STAKE_PLAN "
+        f"date={target_date} configured={stake_plan['configuredBaseStakeUsd']:.0f} "
+        f"effective={stake_plan['effectiveBaseStakeUsd']:.0f} "
+        f"orders={stake_plan['plannedOrderCount']} "
+        f"base1_required=${stake_plan['baseOneRequiredStakeUsd']:.3f} "
+        f"required=${stake_plan['requiredStakeUsd']:.3f} "
+        f"balance=${balance_usd:.3f}"
+    )
     results = []
 
     for source in candidates:
@@ -566,9 +718,7 @@ def main() -> int:
 
         live_record = None
         try:
-            stake = compute_city_stake(str(source.get("citySlug")), live_orders, target_date)
-            if existing_record and existing_record.get("requestedStakeUsd") not in (None, ""):
-                stake["stakeUsd"] = round_money(existing_record.get("requestedStakeUsd"), 6) or stake["stakeUsd"]
+            stake = compute_city_stake(str(source.get("citySlug")), live_orders, target_date, stake_plan)
             event = order_engine.fetch_event(str(source.get("eventSlug")))
             if not event:
                 raise RuntimeError(f"event not found: {source.get('eventSlug')}")
@@ -624,6 +774,14 @@ def main() -> int:
                         "progressiveStepIndex": stake["stepIndex"],
                         "progressiveLossStreakBefore": stake["lossStreakBefore"],
                         "progressiveCyclePnlBefore": stake.get("cyclePnlBefore"),
+                        "configuredBaseStakeUsd": stake.get("configuredBaseStakeUsd"),
+                        "effectiveBaseStakeUsd": stake.get("effectiveBaseStakeUsd"),
+                        "configuredStakeSequenceLabel": stake.get("configuredStakeSequenceLabel"),
+                        "effectiveStakeSequenceLabel": stake.get("effectiveStakeSequenceLabel"),
+                        "plannedStakeTotalUsd": stake.get("plannedStakeTotalUsd"),
+                        "availableBalanceUsd": stake.get("availableBalanceUsd"),
+                        "stakeDowngradedByBalance": stake.get("stakeDowngradedByBalance"),
+                        "stakeDowngradeReason": stake.get("stakeDowngradeReason"),
                         "baselinePosition": round_money(baseline, 6),
                         "status": "placing",
                         "result": "pending",
@@ -697,6 +855,8 @@ def main() -> int:
                         "stakeUsd": actual_cost_estimate,
                         "spentUsd": actual_cost_estimate,
                         "result": "pending",
+                        "error": None,
+                        "failedAt": None,
                     }
                 )
                 log_status = "BOUGHT" if delta > MIN_SUCCESS_SHARES else "SUBMITTED"

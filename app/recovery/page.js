@@ -97,6 +97,9 @@ function formatStatus(value) {
     idle: "未启动",
     "unfilled-no-retry": "未成交",
     "limit-open": "限价挂单中",
+    "event-live": "事件进行中",
+    "partial-event-live": "单边挂单进行中",
+    "event-ended": "事件已结束",
     "waiting-start-delay": "等待挂单窗口",
     "prestart-entry-window-closed": "预挂窗口关闭",
     "external-position-skip": "外部仓位干扰",
@@ -117,12 +120,16 @@ function formatReason(value) {
     "trigger-order-failed-waiting-retry": "40c 触发下单失败，等待重试",
     "market-top-up-failed-waiting-retry": "补单失败，等待重试",
     "external-position-interference": "检测到外部手动仓位",
+    "event-window-ended": "事件已结束，当前只记录挂单不做结算",
+    "event-started": "事件已开始，等待后续收菜/结算",
+    "event-started-one-side-submitted": "事件已开始，仅单边提交成功",
   };
   return map[value] || value || "--";
 }
 
 function formatTriggerType(value) {
   const map = {
+    "fixed-limit": "固定限价",
     "limit-pair": "限价双边",
     "trigger-threshold": "40c 触发",
   };
@@ -169,7 +176,7 @@ function DailyPnlStrip({ title, rows }) {
           <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Daily PnL</p>
           <h2 className="mt-3 text-2xl font-semibold text-neutral-950">{title}</h2>
         </div>
-        <p className="text-sm text-[var(--ink-soft)]">最近 7 天，按已结算事件统计</p>
+        <p className="text-sm text-[var(--ink-soft)]">最近 7 天，按已结算收益统计；4H 挂单记录单独展示</p>
       </div>
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         {rows.map((row) => (
@@ -211,9 +218,9 @@ function RecoveryResetStrip({ variant }) {
       <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="font-display text-xs uppercase tracking-[0.42em] text-white/55">4H Reset Baseline</p>
-          <h2 className="mt-3 text-3xl font-semibold tracking-[0.04em]">4 小时收益从这里重新计算</h2>
+          <h2 className="mt-3 text-3xl font-semibold tracking-[0.04em]">4 小时限价挂单记录</h2>
           <p className="mt-3 text-sm leading-6 text-white/68">
-            重置时间 {formatDateTime(summary.resetAt)}，历史收益、事件和下单台账已清空，当前活跃事件会继续被跟踪。
+            当前 4H 逻辑只负责按配置双边挂限价单，不在这里计算结算收益；历史事件按时间显示为挂单中、进行中或已结束。
           </p>
         </div>
         <div className="grid gap-3 text-sm sm:grid-cols-3 lg:min-w-[620px]">
@@ -230,11 +237,11 @@ function RecoveryResetStrip({ variant }) {
             </p>
           </div>
           <div className="rounded-[1.3rem] border border-white/12 bg-white/8 px-4 py-4">
-            <p className="text-white/52">新周期收益</p>
+            <p className="text-white/52">挂单记录收益</p>
             <p className={`mt-2 font-semibold ${resetPnlTone}`}>
               {formatUsd(summary.realizedNetPnlUsd)}
             </p>
-            <p className="mt-2 text-white/60">{summary.totalEvents || 0} 个已结算事件</p>
+            <p className="mt-2 text-white/60">{summary.totalEvents || 0} 个事件记录</p>
           </div>
         </div>
       </div>
@@ -263,7 +270,7 @@ export default async function RecoveryPage() {
                 4 小时恢复页
               </h1>
               <p className="mt-4 max-w-4xl text-base leading-8 text-[var(--ink-soft)]">
-                这里保留 BTC recovery 的核心盈亏、模式设置和事件台账。
+                这里展示 BTC 4H 限价挂单状态、模式设置和事件台账；当前策略只负责挂单，不在本页做结算收益。
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
@@ -284,7 +291,7 @@ export default async function RecoveryPage() {
         </header>
 
         <section className="grid gap-4 lg:grid-cols-3">
-          <MetricCard label="总盈亏" value={pnlSummary.totalPnlUsd} helper="所有已结算事件累计" />
+          <MetricCard label="总盈亏" value={pnlSummary.totalPnlUsd} helper="已结算收益累计；4H 挂单不在这里结算" />
           <MetricCard
             label="今日盈亏"
             value={pnlSummary.todayPnlUsd}

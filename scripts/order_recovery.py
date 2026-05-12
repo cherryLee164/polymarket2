@@ -232,6 +232,13 @@ def acquire_lock() -> None:
     write_json(LOCK_PATH, {"pid": os.getpid(), "variant": "4h", "startedAt": now_utc().isoformat()})
 
 
+def ensure_worker_lock() -> None:
+    current = read_json(LOCK_PATH, None)
+    if isinstance(current, dict) and int(current.get("pid") or 0) == os.getpid():
+        return
+    write_json(LOCK_PATH, {"pid": os.getpid(), "variant": "4h", "startedAt": now_utc().isoformat()})
+
+
 def release_lock() -> None:
     current = read_json(LOCK_PATH, None)
     if isinstance(current, dict) and int(current.get("pid") or 0) == os.getpid():
@@ -621,7 +628,23 @@ def refresh_event_totals(event: Dict[str, Any]) -> None:
     event["pnlUsd"] = 0.0
     event["upPlaced"] = bool(event["orders"]["up"].get("orderId"))
     event["downPlaced"] = bool(event["orders"]["down"].get("orderId"))
-    if event["upPlaced"] and event["downPlaced"]:
+    event_start = legacy.parse_date(event.get("eventStart"))
+    event_end = legacy.parse_date(event.get("eventEnd"))
+    current = now_utc()
+    if event_end and current >= event_end:
+        event["status"] = "event-ended" if submitted else "ended-no-entry"
+        event["statusReason"] = "event-window-ended"
+    elif event_start and current >= event_start:
+        if event["upPlaced"] and event["downPlaced"]:
+            event["status"] = "event-live"
+            event["statusReason"] = "event-started"
+        elif event["upPlaced"] or event["downPlaced"]:
+            event["status"] = "partial-event-live"
+            event["statusReason"] = "event-started-one-side-submitted"
+        else:
+            event["status"] = "missed-window"
+            event["statusReason"] = "event-already-started"
+    elif event["upPlaced"] and event["downPlaced"]:
         event["status"] = "limit-open"
         event["statusReason"] = None
     elif event["upPlaced"] or event["downPlaced"]:
@@ -705,6 +728,7 @@ def event_row(event: Dict[str, Any]) -> Dict[str, Any]:
 def trade_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = []
     for event in events:
+        event_status = str(event.get("status") or "")
         for side in ("up", "down"):
             order = event.get("orders", {}).get(side, {})
             if not order.get("orderId"):
@@ -723,7 +747,7 @@ def trade_rows(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "side": side,
                     "placedAt": order.get("lastAttemptAt"),
                     "triggerType": "fixed-limit",
-                    "status": order.get("status"),
+                    "status": event_status if event_status in {"event-live", "event-ended"} else order.get("status"),
                     "triggerCents": price_cents,
                     "thresholdCents": price_cents,
                     "spentUsd": spent_usd,
@@ -780,6 +804,13 @@ def persist_reports(state: Dict[str, Any]) -> None:
 
 
 def persist_state(state: Dict[str, Any]) -> None:
+    ensure_worker_lock()
+    for event in state.get("events", []):
+        if isinstance(event, dict) and isinstance(event.get("orders"), dict):
+            refresh_event_totals(event)
+    active_event = state.get("activeEvent")
+    if isinstance(active_event, dict) and isinstance(active_event.get("orders"), dict):
+        refresh_event_totals(active_event)
     state["workerPid"] = os.getpid()
     state["mode"] = "dry-run" if ORDER_DRY_RUN else "live"
     state["strategy"] = strategy_snapshot()

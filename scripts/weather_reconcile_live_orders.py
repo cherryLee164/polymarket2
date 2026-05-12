@@ -96,12 +96,28 @@ def response_order_id(record: Dict[str, Any]) -> str:
 
 def response_order_ids(record: Dict[str, Any]) -> List[str]:
     ids: List[str] = []
-    for value in record.get("orderIds") or []:
-        if value:
-            ids.append(str(value))
     primary = response_order_id(record)
     if primary:
         ids.append(primary)
+    attempts = record.get("orderAttempts")
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            if attempt.get("orderId"):
+                ids.append(str(attempt["orderId"]))
+            response = attempt.get("response")
+            if isinstance(response, dict):
+                for key in ("orderID", "orderId", "id"):
+                    if response.get(key):
+                        ids.append(str(response[key]))
+    for value in record.get("botExtraOrderIds") or []:
+        if value:
+            ids.append(str(value))
+    if not ids:
+        for value in record.get("orderIds") or []:
+            if value:
+                ids.append(str(value))
     return list(dict.fromkeys(ids))
 
 
@@ -260,7 +276,7 @@ def compute_live_payout(record: Dict[str, Any], aggregate: Dict[str, float]) -> 
 
 
 def accounting_stake_usd(record: Dict[str, Any]) -> float:
-    for key in ("requestedStakeUsd", "stakeUsd", "actualBuyCostUsd"):
+    for key in ("actualBuyCostUsd", "stakeUsd", "requestedStakeUsd"):
         value = as_float(record.get(key))
         if value > EPSILON:
             return value
@@ -268,6 +284,10 @@ def accounting_stake_usd(record: Dict[str, Any]) -> float:
 
 
 def estimated_no_win_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
+    actual_cost = as_float(record.get("actualBuyCostUsd"))
+    actual_shares = as_float(record.get("actualBuyShares"))
+    if actual_cost > EPSILON and actual_shares > EPSILON:
+        return round_money(actual_shares - actual_cost)
     existing = record.get("estimatedNoWinPnlUsd")
     if existing not in (None, ""):
         return round_money(existing)
@@ -353,7 +373,9 @@ def reconcile_record(record: Dict[str, Any], trader) -> Tuple[Dict[str, Any], bo
         return no_fill_update(record)
 
     payout, pnl = compute_live_payout(record, aggregate)
+    order_ids = response_order_ids(record)
     updates = {
+        "orderIds": order_ids,
         "actualBuyCostUsd": round_money(aggregate["buyCost"]),
         "actualBuyShares": round_money(aggregate["buyShares"]),
         "actualSellProceedsUsd": round_money(aggregate["sellProceeds"]),
@@ -365,7 +387,10 @@ def reconcile_record(record: Dict[str, Any], trader) -> Tuple[Dict[str, Any], bo
         "stakeUsd": round_money(aggregate["buyCost"]),
         "spentUsd": round_money(aggregate["buyCost"]),
         "sharesBought": round_money(aggregate["buyShares"]),
+        "estimatedNoWinPnlUsd": round_money(aggregate["buyShares"] - aggregate["buyCost"]),
         "fillStatus": "bot-order-fill",
+        "error": None,
+        "failedAt": None,
     }
     if "requestedStakeUsd" not in record:
         updates["requestedStakeUsd"] = record.get("stakeUsd")
