@@ -43,3 +43,9 @@
 - Add a separate simulated strategy that first models overseas weather orders around 18:00 Beijing time, then domestic weather orders around 06:00 Beijing time after overseas results are expected.
 - The simulation must not place real orders or write to live weather order records.
 - Domestic and overseas legs should be one combined rotation strategy for reporting, but separate from the existing live strategy.
+
+## Weather Offset Strategy Decision
+- The `-1C`, `0C`, and `+1C` weather temperature targets should be independent strategies for both reporting and live progression.
+- Combining same-city offsets into one progression is not desirable because normal winning combinations may not recover the combined stake; each offset needs its own loss ladder.
+- Each offset also needs independent live stake settings, so users can enable all three while giving each offset a different base stake and multiplier sequence.
+- The old 10/11/12/13 threshold simulation is no longer useful for the main weather page after sustained negative performance.

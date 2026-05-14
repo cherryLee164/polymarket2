@@ -1,0 +1,3 @@
+[RECOVERY-SETTLEMENT] [2026-04-14 20:10:23 Asia/Shanghai] Settlement worker ready | idle=2m active=2m sell=off target=99.9c claim=api maxSell=1
+[RECOVERY-SETTLEMENT] [2026-04-14 20:10:24 Asia/Shanghai] Signature type 1 probe ok: balance=$10.149105 funder=0x3468375cbCe77260779805706a06A5D326163965
+[RECOVERY-SETTLEMENT] [2026-04-14 20:10:24 Asia/Shanghai] Live trading client ready for 0x8Fe11c239Fbd058728071BF234B27a2a24b3D547 (signatureType=1, funder=0x3468375cbCe77260779805706a06A5D326163965)

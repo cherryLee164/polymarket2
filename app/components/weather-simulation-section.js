@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { getWeatherDashboardSnapshot } from "@/lib/weather-trading-data";
 
 function formatMoney(value, digits = 3) {
@@ -25,14 +23,6 @@ function formatPrice(value) {
   return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}c` : "--";
 }
 
-function formatDate(ymd) {
-  const [year, month, day] = String(ymd || "").split("-");
-  if (!year || !month || !day) {
-    return ymd || "--";
-  }
-  return `${year}/${month}/${day}`;
-}
-
 function formatShortDate(ymd) {
   const [, month, day] = String(ymd || "").split("-");
   if (!month || !day) {
@@ -41,14 +31,9 @@ function formatShortDate(ymd) {
   return `${month}/${day}`;
 }
 
-function thresholdKey(value) {
-  const numeric = Number(value);
-  return String(Math.round((Number.isFinite(numeric) ? numeric : 0.9) * 10000)).padStart(4, "0");
-}
-
-function thresholdLabel(value) {
-  const numeric = Number(value);
-  return `${Math.round((Number.isFinite(numeric) ? numeric : 0.9) * 100)}+`;
+function offsetLabel(value) {
+  const numeric = Number(value) || 0;
+  return `${numeric > 0 ? "+" : ""}${numeric}C`;
 }
 
 function toneClass(value) {
@@ -59,100 +44,49 @@ function toneClass(value) {
   return numeric > 0 ? "text-[var(--signal-up)]" : "text-[var(--signal-down)]";
 }
 
-function buildHomeHref(currentQuery, patch) {
-  const params = new URLSearchParams();
-  const merged = { ...currentQuery, ...patch };
-  for (const [key, value] of Object.entries(merged)) {
-    if (value === undefined || value === null || value === "") {
-      continue;
-    }
-    params.set(key, String(value));
-  }
-  const queryString = params.toString();
-  return queryString ? `/?${queryString}` : "/";
-}
-
-function buildPlannedStrategyRows(simulation) {
-  const existing = simulation?.strategyRows || [];
-  if (existing.length) {
-    return existing;
-  }
-  const thresholds = simulation?.thresholds?.length ? simulation.thresholds : [0.85, 0.88, 0.9, 0.92, 0.95, 0.97];
-  const slots = simulation?.captureSlots || [];
-  return slots.flatMap((slot) =>
-    thresholds.map((threshold) => ({
-      key: `${slot.id}:${thresholdKey(threshold)}`,
-      slotId: slot.id,
-      slotLabel: slot.label,
-      slotHour: slot.hour,
-      slotMinute: slot.minute || 0,
-      thresholdNoPrice: threshold,
-      thresholdLabel: thresholdLabel(threshold),
-      label: `${slot.label} No ${thresholdLabel(threshold)}`,
-      summary: {
-        records: 0,
-        settledRecords: 0,
-        pending: 0,
-        wins: 0,
-        losses: 0,
-        totalStakeUsd: 0,
-        netPnlUsd: 0,
-        roi: null,
-      },
-    })),
-  );
-}
-
-function strategyKeyForRecord(row) {
-  return `${row.captureSlotId}:${thresholdKey(row.thresholdNoPrice)}`;
+function aggregateRows(rows) {
+  const settled = rows.filter((row) => row.status === "resolved" && Number.isFinite(Number(row.accountingPnlUsd)));
+  const totalStakeUsd = settled.reduce((sum, row) => sum + Number(row.stakeUsd || 0), 0);
+  const netPnlUsd = settled.reduce((sum, row) => sum + Number(row.accountingPnlUsd || 0), 0);
+  return {
+    records: rows.length,
+    settledRecords: settled.length,
+    pending: rows.length - settled.length,
+    wins: settled.filter((row) => Number(row.accountingPnlUsd) > 0).length,
+    losses: settled.filter((row) => Number(row.accountingPnlUsd) < 0).length,
+    totalStakeUsd,
+    netPnlUsd,
+    roi: totalStakeUsd > 0 ? netPnlUsd / totalStakeUsd : null,
+  };
 }
 
 function aggregateCityRows(rows) {
   const map = new Map();
   for (const row of rows) {
-    const key = row.citySlug || row.cityZh || "city";
+    const key = `${row.citySlug}:${row.temperatureOffsetC}`;
     const current = map.get(key) || {
       citySlug: row.citySlug,
       cityZh: row.cityZh || row.cityEn || row.citySlug,
-      records: 0,
-      settledRecords: 0,
-      pending: 0,
-      wins: 0,
-      losses: 0,
-      totalStakeUsd: 0,
-      netPnlUsd: 0,
+      temperatureOffsetC: row.temperatureOffsetC,
+      rows: [],
     };
-    current.records += 1;
-    if (row.status === "resolved" && Number.isFinite(Number(row.accountingPnlUsd))) {
-      current.settledRecords += 1;
-      current.totalStakeUsd += Number(row.stakeUsd || 0);
-      current.netPnlUsd += Number(row.accountingPnlUsd || 0);
-      if (Number(row.accountingPnlUsd) > 0) {
-        current.wins += 1;
-      } else if (Number(row.accountingPnlUsd) < 0) {
-        current.losses += 1;
-      }
-    } else {
-      current.pending += 1;
-    }
+    current.rows.push(row);
     map.set(key, current);
   }
   return [...map.values()]
-    .map((row) => ({
-      ...row,
-      totalStakeUsd: Number(row.totalStakeUsd.toFixed(6)),
-      netPnlUsd: Number(row.netPnlUsd.toFixed(6)),
-      roi: row.totalStakeUsd > 0 ? Number((row.netPnlUsd / row.totalStakeUsd).toFixed(6)) : null,
+    .map((item) => ({
+      ...item,
+      summary: aggregateRows(item.rows),
     }))
     .sort((left, right) => {
-      if (Number(right.netPnlUsd) !== Number(left.netPnlUsd)) {
-        return Number(right.netPnlUsd) - Number(left.netPnlUsd);
+      if (Number(right.summary.netPnlUsd) !== Number(left.summary.netPnlUsd)) {
+        return Number(right.summary.netPnlUsd) - Number(left.summary.netPnlUsd);
       }
       return String(left.cityZh || "").localeCompare(String(right.cityZh || ""), "zh-CN");
     });
 }
 
-function CompactMetric({ label, value, helper, toneValue }) {
+function MetricCard({ label, value, helper, toneValue }) {
   return (
     <article className="rounded-[1.25rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] px-4 py-3">
       <p className="text-xs text-[var(--ink-soft)]">{label}</p>
@@ -162,33 +96,89 @@ function CompactMetric({ label, value, helper, toneValue }) {
   );
 }
 
-function StrategyTabs({ rows, activeKey, currentQuery }) {
+function StrategyCards({ rows }) {
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1">
+    <section className="grid gap-3 md:grid-cols-3">
       {rows.map((row) => {
-        const active = row.key === activeKey;
+        const summary = row.summary || {};
         return (
-          <Link
+          <article
             key={row.key}
-            href={buildHomeHref(currentQuery, {
-              surface: "weather",
-              weatherTab: "simulation",
-              weatherSimTab: row.key,
-            })}
-            className={`min-w-[150px] rounded-[1.2rem] border px-4 py-3 text-left transition ${
-              active
-                ? "border-[var(--accent-strong)] bg-[rgba(214,122,67,0.18)]"
-                : "border-[var(--line)] bg-white/60 hover:border-[var(--accent-strong)]"
+            className={`rounded-[1.45rem] border px-4 py-4 shadow-[var(--shadow)] ${
+              row.selected
+                ? "border-[var(--accent-strong)] bg-[rgba(214,122,67,0.14)]"
+                : "border-[var(--line)] bg-[var(--panel)]"
             }`}
           >
-            <div className="text-base font-semibold text-neutral-950">{row.label}</div>
-            <div className="mt-1 text-xs text-[var(--ink-soft)]">
-              {row.summary.records || 0} 单 / ROI {formatPercent(row.summary.roi)}
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">Offset</p>
+                <h3 className="mt-2 text-2xl font-semibold text-neutral-950">{row.label}</h3>
+              </div>
+              <span className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-1 text-xs font-semibold text-neutral-800">
+                {row.selected ? "已选" : "观察"}
+              </span>
             </div>
-          </Link>
+            <div className={`mt-4 text-3xl font-semibold ${toneClass(summary.netPnlUsd)}`}>
+              {formatMoney(summary.netPnlUsd)}
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-[var(--ink-soft)]">
+              <div>ROI {formatPercent(summary.roi)}</div>
+              <div>赢 {summary.wins || 0}</div>
+              <div>输 {summary.losses || 0}</div>
+            </div>
+            <p className="mt-3 text-xs text-[var(--ink-soft)]">
+              {summary.settledRecords || 0} 已结算 / {summary.pending || 0} 待结算
+            </p>
+            <p className="mt-2 text-xs text-[var(--ink-soft)]">
+              实盘序列 {row.liveConfig?.sequenceLabel || "--"}
+            </p>
+          </article>
         );
       })}
-    </div>
+    </section>
+  );
+}
+
+function CityRanking({ rows }) {
+  return (
+    <section className="rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow)]">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="font-display text-xs uppercase tracking-[0.34em] text-[var(--ink-soft)]">City Offset ROI</p>
+          <h3 className="mt-2 text-xl font-semibold text-neutral-950">城市策略排名</h3>
+        </div>
+        <p className="text-xs text-[var(--ink-soft)]">按城市和温度偏移独立统计</p>
+      </div>
+      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {rows.length ? (
+          rows.slice(0, 18).map((row) => (
+            <article key={`${row.citySlug}:${row.temperatureOffsetC}`} className="rounded-[1.15rem] border border-[var(--line)] bg-white/70 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-neutral-950">
+                    {row.cityZh} {offsetLabel(row.temperatureOffsetC)}
+                  </div>
+                  <div className="mt-1 text-xs text-[var(--ink-soft)]">
+                    {row.summary.records} 单 / {row.summary.settledRecords} 已结算
+                  </div>
+                </div>
+                <div className={`text-lg font-semibold ${toneClass(row.summary.netPnlUsd)}`}>
+                  {formatMoney(row.summary.netPnlUsd)}
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-[var(--ink-soft)]">
+                ROI {formatPercent(row.summary.roi)} / 赢 {row.summary.wins} / 输 {row.summary.losses}
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="rounded-[1.15rem] border border-dashed border-[var(--line)] bg-white/50 px-4 py-6 text-sm text-[var(--ink-soft)] md:col-span-2 xl:col-span-3">
+            暂无可统计的 offset 模拟记录。
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -196,7 +186,7 @@ function SimulationTable({ rows }) {
   return (
     <section className="overflow-hidden rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] shadow-[var(--shadow)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
-        <h3 className="font-display text-xl font-semibold tracking-[0.04em] text-neutral-950">模拟明细</h3>
+        <h3 className="font-display text-xl font-semibold tracking-[0.04em] text-neutral-950">策略明细</h3>
         <p className="text-xs text-[var(--ink-soft)]">{rows.length} 条</p>
       </div>
       <div className="overflow-x-auto">
@@ -205,16 +195,16 @@ function SimulationTable({ rows }) {
             <tr>
               <th className="px-4 py-3 font-medium">日期</th>
               <th className="px-4 py-3 font-medium">城市</th>
+              <th className="px-4 py-3 font-medium">策略</th>
               <th className="px-4 py-3 font-medium">市场</th>
               <th className="px-4 py-3 font-medium">No 价格</th>
-              <th className="px-4 py-3 font-medium">投入</th>
-              <th className="px-4 py-3 font-medium">状态</th>
+              <th className="px-4 py-3 font-medium">实际高温</th>
               <th className="px-4 py-3 font-medium">收益</th>
             </tr>
           </thead>
           <tbody>
             {rows.length ? (
-              rows.slice(0, 80).map((row) => (
+              rows.slice(0, 100).map((row) => (
                 <tr key={row.key} className="border-t border-[var(--line)] align-top">
                   <td className="px-4 py-3">{formatShortDate(row.date)}</td>
                   <td className="px-4 py-3">
@@ -222,12 +212,17 @@ function SimulationTable({ rows }) {
                     <div className="mt-1 text-xs text-[var(--ink-soft)]">{row.forecastTarget}</div>
                   </td>
                   <td className="px-4 py-3">
+                    <div className="font-semibold text-neutral-950">{offsetLabel(row.temperatureOffsetC)}</div>
+                    <div className="mt-1 text-xs text-[var(--ink-soft)]">
+                      预报 {row.forecastMaxTempC ?? "--"}C / 目标 {row.targetTempC ?? "--"}C
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="font-semibold text-neutral-950">{row.marketTitle || "--"}</div>
                     <div className="mt-1 max-w-[320px] truncate text-xs text-[var(--ink-soft)]">{row.marketQuestion}</div>
                   </td>
                   <td className="px-4 py-3 font-semibold text-neutral-950">{formatPrice(row.buyNoPrice)}</td>
-                  <td className="px-4 py-3">{formatMoney(row.stakeUsd)}</td>
-                  <td className="px-4 py-3">{row.status === "resolved" ? row.resolvedOutcome || "resolved" : "待结算"}</td>
+                  <td className="px-4 py-3">{row.actualMaxTempC ?? "--"}C</td>
                   <td className={`px-4 py-3 font-semibold ${toneClass(row.accountingPnlUsd)}`}>
                     {row.status === "resolved" ? formatMoney(row.accountingPnlUsd) : "--"}
                   </td>
@@ -236,7 +231,7 @@ function SimulationTable({ rows }) {
             ) : (
               <tr>
                 <td className="px-4 py-8 text-center text-sm text-[var(--ink-soft)]" colSpan={7}>
-                  还没有采样数据。当前配置会从下一个 10:00 / 11:00 / 12:00 / 13:00 窗口开始记录 No 85/88/90/92/95/97 模拟单。
+                  还没有 offset 候选记录。下一次天气抓取后会开始统计 -1 / 0 / +1。
                 </td>
               </tr>
             )}
@@ -247,89 +242,43 @@ function SimulationTable({ rows }) {
   );
 }
 
-function CityRanking({ rows }) {
-  return (
-    <section className="rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow)]">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <p className="font-display text-xs uppercase tracking-[0.34em] text-[var(--ink-soft)]">City ROI</p>
-          <h3 className="mt-2 text-xl font-semibold text-neutral-950">城市模拟排行</h3>
-        </div>
-        <p className="text-xs text-[var(--ink-soft)]">按当前切换策略统计</p>
-      </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-        {rows.length ? (
-          rows.map((row) => (
-            <article key={row.citySlug || row.cityZh} className="rounded-[1.15rem] border border-[var(--line)] bg-white/70 px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-neutral-950">{row.cityZh}</div>
-                  <div className="mt-1 text-xs text-[var(--ink-soft)]">
-                    {row.records} 单 / {row.settledRecords} 已结算
-                  </div>
-                </div>
-                <div className={`text-lg font-semibold ${toneClass(row.netPnlUsd)}`}>{formatMoney(row.netPnlUsd)}</div>
-              </div>
-              <div className="mt-2 text-xs text-[var(--ink-soft)]">
-                胜 {row.wins} / 负 {row.losses} / ROI {formatPercent(row.roi)}
-              </div>
-            </article>
-          ))
-        ) : (
-          <div className="rounded-[1.15rem] border border-dashed border-[var(--line)] bg-white/50 px-4 py-6 text-sm text-[var(--ink-soft)] md:col-span-2 xl:col-span-3">
-            暂无城市排行，等第一个采样窗口产生模拟单后显示。
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-export async function WeatherSimulationPanel({ currentQuery = {} }) {
+export async function WeatherSimulationPanel() {
   const snapshot = await getWeatherDashboardSnapshot({ sync: false });
-  const simulation = snapshot.thresholdSim || {};
-  const strategyRows = buildPlannedStrategyRows(simulation);
-  const activeKey =
-    strategyRows.find((row) => row.key === currentQuery.weatherSimTab)?.key ||
-    strategyRows[0]?.key ||
-    "";
-  const activeStrategy = strategyRows.find((row) => row.key === activeKey) || strategyRows[0] || {};
-  const selectedRows = (simulation.records || []).filter((row) => strategyKeyForRecord(row) === activeKey);
+  const simulation = snapshot.offsetSimulation || snapshot.thresholdSim || {};
+  const selectedOffsets = new Set(simulation.selectedOffsets || [0]);
+  const selectedRows = (simulation.records || []).filter((row) => selectedOffsets.has(Number(row.temperatureOffsetC)));
+  const selectedSummary = aggregateRows(selectedRows);
   const todayRows = selectedRows.filter((row) => row.date === snapshot.localDate);
-  const cityRows = aggregateCityRows(selectedRows);
-  const overall = activeStrategy.summary || {};
-  const allOverall = simulation.summary?.overall || {};
+  const cityRows = aggregateCityRows(simulation.records || []);
 
   return (
     <div className="space-y-4">
       <section className="rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.86),rgba(255,246,224,0.72))] p-4 shadow-[var(--shadow)]">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="font-display text-xs uppercase tracking-[0.36em] text-[var(--ink-soft)]">Weather Simulation</p>
-            <h2 className="mt-2 text-2xl font-semibold text-neutral-950">天气多阈值模拟观察</h2>
+            <p className="font-display text-xs uppercase tracking-[0.36em] text-[var(--ink-soft)]">Weather Offset Simulation</p>
+            <h2 className="mt-2 text-2xl font-semibold text-neutral-950">天气 -1 / 0 / +1 策略收益</h2>
             <p className="mt-1 text-sm text-[var(--ink-soft)]">
-              从今天开始记录，实际会从下一个未经过的时间窗口生效；赢按预收益，输按投注金额。
+              每个温度偏移独立统计，实战递进也按城市和 offset 分开计算。
             </p>
           </div>
           <div className="text-xs text-[var(--ink-soft)]">
-            当前日期 {formatDate(snapshot.localDate)} / 单笔模拟 {formatMoney(simulation.stakeUsd || 1)}
+            当前模式 {simulation.executionMode === "simulation" ? "模拟" : "实战"} / 单笔 {formatMoney(simulation.stakeUsd || 1)}
           </div>
-        </div>
-
-        <div className="mt-4">
-          <StrategyTabs rows={strategyRows} activeKey={activeKey} currentQuery={currentQuery} />
         </div>
       </section>
 
+      <StrategyCards rows={simulation.strategyRows || []} />
+
       <section className="grid gap-3 md:grid-cols-4">
-        <CompactMetric label="当前策略收益" value={formatMoney(overall.netPnlUsd)} helper={activeStrategy.label} toneValue={overall.netPnlUsd} />
-        <CompactMetric label="当前策略 ROI" value={formatPercent(overall.roi)} helper={`${overall.settledRecords || 0} 已结算`} toneValue={overall.roi} />
-        <CompactMetric label="今日模拟单" value={`${todayRows.length}`} helper={`${formatDate(snapshot.localDate)} 待观察`} toneValue={0} />
-        <CompactMetric label="全部模拟收益" value={formatMoney(allOverall.netPnlUsd)} helper={`${allOverall.totalRecords || 0} 单累计`} toneValue={allOverall.netPnlUsd} />
+        <MetricCard label="已选组合收益" value={formatMoney(selectedSummary.netPnlUsd)} helper={`${selectedSummary.settledRecords} 已结算`} toneValue={selectedSummary.netPnlUsd} />
+        <MetricCard label="已选组合 ROI" value={formatPercent(selectedSummary.roi)} helper={`${selectedSummary.records} 单累计`} toneValue={selectedSummary.roi} />
+        <MetricCard label="今日已选候选" value={`${todayRows.length}`} helper={snapshot.localDate} toneValue={0} />
+        <MetricCard label="全部 offset 收益" value={formatMoney(simulation.summary?.overall?.netPnlUsd)} helper={`${simulation.summary?.overall?.records || 0} 单累计`} toneValue={simulation.summary?.overall?.netPnlUsd} />
       </section>
 
       <CityRanking rows={cityRows} />
-      <SimulationTable rows={selectedRows} />
+      <SimulationTable rows={simulation.records || []} />
     </div>
   );
 }

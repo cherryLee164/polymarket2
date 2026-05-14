@@ -1,0 +1,23 @@
+
+> ploymarket@0.1.0 dev
+> next dev
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.2.40:3000
+
+✓ Starting...
+Creating turbopack project { dir: 'D:\\cursor\\ploymarket', testMode: true }
+✓ Ready in 750ms
+ GET / 200 in 2.5s (compile: 289ms, render: 2.2s)
+ GET /?surface=weather 200 in 2.3s (compile: 74ms, render: 2.2s)
+ GET /recovery 200 in 2.5s (compile: 102ms, render: 2.4s)
+ GET /?surface=weather 200 in 223ms (compile: 4ms, render: 220ms)
+ GET /?surface=weather 200 in 1727ms (compile: 3ms, render: 1724ms)
+✓ Compiled in 54ms
+✓ Compiled in 52ms
+✓ Compiled in 45ms
+ GET / 200 in 1839ms (compile: 83ms, render: 1756ms)
+ GET / 200 in 2.2s (compile: 12ms, render: 2.1s)
+ GET / 200 in 2.0s (compile: 5ms, render: 2.0s)
+[?25h

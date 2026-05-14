@@ -51,7 +51,13 @@ Rewrite BTC auto-order logic only, leave weather unchanged, reset BTC to a clean
 - [completed] Add standalone UI/report entry for rotation simulation.
 - [completed] Verify with syntax/lint and snapshot output.
 
+## Current Task: Weather Offset Strategies
+- [completed] Replace the old threshold simulation view with -1/0/+1 weather offset strategy reporting.
+- [completed] Add live config for selected offsets, simulation/live mode, and per-offset stake settings.
+- [completed] Generate offset candidates from each forecast and keep per-offset simulation accounting.
+- [completed] Update live ordering so each selected offset is an independent strategy/progression.
+- [completed] Verify syntax/lint and snapshot output.
+
 ## Guardrails
-- Do not modify current weather live ordering behavior.
-- Do not modify current weather live records except through a new simulation file.
-- Do not place or cancel any real orders for this simulation task.
+- Do not place or cancel real orders while implementing this task.
+- Keep each weather temperature offset independent for progression and reporting.

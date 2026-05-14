@@ -16,6 +16,7 @@ LIVE_ORDERS_PATH = DATA_DIR / "live-orders.json"
 WEATHER_CONFIG_PATH = DATA_DIR / "config.json"
 TZ = ZoneInfo("Asia/Shanghai")
 STRATEGY_ID = "weather-live-125"
+OFFSET_OPTIONS = {-1, 0, 1}
 
 
 def env_float(name: str, default: float) -> float:
@@ -104,7 +105,25 @@ def normalize_base_stake(value: Any) -> int:
 
 def build_stake_sequence(base_stake: Any) -> List[float]:
     base = normalize_base_stake(base_stake)
-    return [float(base * multiplier) for multiplier in (1, 2, 2, 3, 5)]
+    return [float(base * multiplier) for multiplier in (1, 2, 2, 2, 3)]
+
+
+def normalize_multipliers(value: Any) -> List[float]:
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value or "").replace(",", "-").split("-")
+    multipliers: List[float] = []
+    for item in raw:
+        numeric = as_float(item)
+        if numeric > 0 and numeric <= 20:
+            multipliers.append(float(numeric))
+    return multipliers[:8] if multipliers else [1.0, 2.0, 2.0, 2.0, 3.0]
+
+
+def build_stake_sequence_from_parts(base_stake: Any, multipliers: Any) -> List[float]:
+    base = normalize_base_stake(base_stake)
+    return [float(base * multiplier) for multiplier in normalize_multipliers(multipliers)]
 
 
 def format_stake_sequence(sequence: List[float]) -> str:
@@ -127,7 +146,7 @@ def read_live_stake_settings() -> Dict[str, Any]:
                 parsed.append(float(item))
             except Exception:
                 continue
-        sequence = parsed or [1.0, 2.0, 2.0, 3.0, 5.0]
+        sequence = parsed or [1.0, 2.0, 2.0, 2.0, 3.0]
         base = normalize_base_stake(sequence[0] if sequence else 1)
     else:
         config = read_json(WEATHER_CONFIG_PATH, {})
@@ -138,6 +157,50 @@ def read_live_stake_settings() -> Dict[str, Any]:
         "base": base,
         "sequence": sequence,
         "label": format_stake_sequence(sequence),
+    }
+
+
+def normalize_offsets(value: Any) -> List[int]:
+    raw = value if isinstance(value, list) else [0]
+    normalized: List[int] = []
+    for item in raw:
+        try:
+            numeric = int(float(item))
+        except Exception:
+            continue
+        if numeric in OFFSET_OPTIONS and numeric not in normalized:
+            normalized.append(numeric)
+    return sorted(normalized) if normalized else [0]
+
+
+def read_live_strategy_config() -> Dict[str, Any]:
+    config = read_json(WEATHER_CONFIG_PATH, {})
+    mode = str(config.get("executionMode") or "live").strip().lower()
+    if mode not in {"simulation", "live"}:
+        mode = "live"
+    raw_strategies = config.get("offsetStrategies") if isinstance(config.get("offsetStrategies"), dict) else {}
+    enabled_offsets = normalize_offsets(config.get("temperatureOffsets"))
+    offset_strategies: Dict[int, Dict[str, Any]] = {}
+    for offset in sorted(OFFSET_OPTIONS):
+        raw = raw_strategies.get(str(offset)) or {}
+        enabled = bool(raw.get("enabled", offset in enabled_offsets))
+        base = normalize_base_stake(raw.get("baseStake", config.get("liveBaseStake")))
+        multipliers = normalize_multipliers(raw.get("multipliers", config.get("stakeMultipliers")))
+        sequence = build_stake_sequence_from_parts(base, multipliers)
+        offset_strategies[offset] = {
+            "offset": offset,
+            "enabled": enabled,
+            "base": base,
+            "multipliers": multipliers,
+            "sequence": sequence,
+            "label": format_stake_sequence(sequence),
+        }
+    if not any(item["enabled"] for item in offset_strategies.values()):
+        offset_strategies[0]["enabled"] = True
+    return {
+        "executionMode": mode,
+        "temperatureOffsets": [offset for offset, item in offset_strategies.items() if item["enabled"]],
+        "offsetStrategies": offset_strategies,
     }
 
 
@@ -158,10 +221,15 @@ def as_float(value: Any, default: float = 0.0) -> float:
 
 
 LIVE_STAKE_SETTINGS = read_live_stake_settings()
+LIVE_STRATEGY_CONFIG = read_live_strategy_config()
 CONFIGURED_BASE_STAKE_USD = float(LIVE_STAKE_SETTINGS.get("base") or 1)
 STAKE_SEQUENCE = LIVE_STAKE_SETTINGS["sequence"]
 BASE_STAKE_USD = STAKE_SEQUENCE[0] if STAKE_SEQUENCE else 1.0
 STRATEGY_LABEL = f"天气实盘同城 {LIVE_STAKE_SETTINGS['label']}"
+
+def get_offset_stake_settings(temperature_offset: Any) -> Dict[str, Any]:
+    offset = normalize_offset(temperature_offset)
+    return LIVE_STRATEGY_CONFIG["offsetStrategies"].get(offset) or LIVE_STRATEGY_CONFIG["offsetStrategies"][0]
 
 
 def parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -186,6 +254,65 @@ def order_key(record: Dict[str, Any]) -> str:
             str(record.get("marketSlug")),
         ]
     )
+
+
+def normalize_offset(value: Any) -> int:
+    try:
+        numeric = int(float(value))
+    except Exception:
+        return 0
+    return numeric if numeric in OFFSET_OPTIONS else 0
+
+
+def expand_weather_candidates(records: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
+    enabled_offsets = set(LIVE_STRATEGY_CONFIG["temperatureOffsets"])
+    expanded: List[Dict[str, Any]] = []
+    for item in records:
+        if (
+            item.get("date") != target_date
+            or item.get("captureSlotId") != CAPTURE_SLOT_ID
+            or not item.get("eventSlug")
+            or str(item.get("status") or "").lower() == "resolved"
+        ):
+            continue
+        candidate_markets = item.get("candidateMarkets")
+        if isinstance(candidate_markets, list) and candidate_markets:
+            for candidate in candidate_markets:
+                if not isinstance(candidate, dict):
+                    continue
+                offset = normalize_offset(candidate.get("temperatureOffsetC"))
+                if offset not in enabled_offsets:
+                    continue
+                no_price = as_float(candidate.get("buyNoPrice"))
+                if not candidate.get("marketSlug") or no_price <= 0 or no_price >= 1 or no_price > MAX_NO_PRICE:
+                    continue
+                source = dict(item)
+                source.update(
+                    {
+                        "temperatureOffsetC": offset,
+                        "targetTempC": candidate.get("targetTempC", item.get("targetTempC")),
+                        "marketSlug": candidate.get("marketSlug"),
+                        "marketTitle": candidate.get("marketTitle"),
+                        "marketQuestion": candidate.get("marketQuestion"),
+                        "marketSelectionMode": candidate.get("marketSelectionMode"),
+                        "marketBucketKind": candidate.get("marketBucketKind"),
+                        "marketBucketValue": candidate.get("marketBucketValue"),
+                        "buyNoPrice": candidate.get("buyNoPrice"),
+                        "sharesBought": candidate.get("sharesBought"),
+                        "marketClosed": candidate.get("marketClosed"),
+                    }
+                )
+                source["key"] = order_key(source)
+                expanded.append(source)
+            continue
+
+        offset = normalize_offset(item.get("temperatureOffsetC"))
+        if offset in enabled_offsets and item.get("marketSlug") and as_float(item.get("buyNoPrice")) <= MAX_NO_PRICE:
+            source = dict(item)
+            source["temperatureOffsetC"] = offset
+            source["key"] = order_key(source)
+            expanded.append(source)
+    return expanded
 
 
 def is_active_order(record: Dict[str, Any]) -> bool:
@@ -345,16 +472,25 @@ def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def compute_city_progression(city_slug: str, live_orders: List[Dict[str, Any]], target_date: str) -> Dict[str, Any]:
+def compute_city_progression(
+    city_slug: str,
+    live_orders: List[Dict[str, Any]],
+    target_date: str,
+    temperature_offset: int = 0,
+) -> Dict[str, Any]:
     city_rows = [
         item
         for item in live_orders
-        if item.get("citySlug") == city_slug and is_active_order(item) and str(item.get("date")) < target_date
+        if item.get("citySlug") == city_slug
+        and normalize_offset(item.get("temperatureOffsetC")) == temperature_offset
+        and is_active_order(item)
+        and str(item.get("date")) < target_date
     ]
     by_date: Dict[str, List[Dict[str, Any]]] = {}
     for row in city_rows:
         by_date.setdefault(str(row.get("date")), []).append(row)
 
+    sequence = get_offset_stake_settings(temperature_offset)["sequence"]
     cycle_pnl = 0.0
     step_index = 0
     for date_key in sorted(by_date):
@@ -365,9 +501,9 @@ def compute_city_progression(city_slug: str, live_orders: List[Dict[str, Any]], 
         if day_pnl > 0:
             cycle_pnl = 0.0
             step_index = 0
-        elif STAKE_SEQUENCE:
+        elif sequence:
             cycle_pnl += day_pnl
-            step_index = min(step_index + 1, len(STAKE_SEQUENCE) - 1)
+            step_index = min(step_index + 1, len(sequence) - 1)
 
     return {
         "stepIndex": step_index,
@@ -391,10 +527,13 @@ def compute_city_stake(
     city_slug: str,
     live_orders: List[Dict[str, Any]],
     target_date: str,
+    temperature_offset: int = 0,
     stake_plan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    progression = compute_city_progression(city_slug, live_orders, target_date)
-    sequence = normalize_sequence((stake_plan or {}).get("sequence") if stake_plan else STAKE_SEQUENCE)
+    progression = compute_city_progression(city_slug, live_orders, target_date, temperature_offset)
+    offset_settings = get_offset_stake_settings(temperature_offset)
+    planned_sequences = (stake_plan or {}).get("sequencesByOffset") or {}
+    sequence = normalize_sequence(planned_sequences.get(str(temperature_offset)) or offset_settings["sequence"])
     step_index = min(int(progression["stepIndex"]), len(sequence) - 1)
     stake_usd = sequence[step_index]
     context = stake_plan or {}
@@ -403,9 +542,9 @@ def compute_city_stake(
         "stepIndex": step_index,
         "lossStreakBefore": progression["lossStreakBefore"],
         "cyclePnlBefore": progression["cyclePnlBefore"],
-        "configuredBaseStakeUsd": context.get("configuredBaseStakeUsd", CONFIGURED_BASE_STAKE_USD),
-        "effectiveBaseStakeUsd": context.get("effectiveBaseStakeUsd", BASE_STAKE_USD),
-        "configuredStakeSequenceLabel": context.get("configuredSequenceLabel", LIVE_STAKE_SETTINGS["label"]),
+        "configuredBaseStakeUsd": offset_settings["base"],
+        "effectiveBaseStakeUsd": sequence[0] if sequence else offset_settings["base"],
+        "configuredStakeSequenceLabel": offset_settings["label"],
         "effectiveStakeSequenceLabel": context.get("effectiveSequenceLabel", format_stake_sequence(sequence)),
         "plannedStakeTotalUsd": context.get("requiredStakeUsd"),
         "availableBalanceUsd": context.get("balanceUsd"),
@@ -421,7 +560,6 @@ def build_balance_aware_stake_plan(
     target_date: str,
     balance_usd: float,
 ) -> Dict[str, Any]:
-    configured_base = normalize_base_stake(CONFIGURED_BASE_STAKE_USD)
     planned_entries = []
     for source in candidates:
         existing_record = existing_by_key.get(order_key(source))
@@ -429,41 +567,42 @@ def build_balance_aware_stake_plan(
             continue
         if existing_record and not is_retryable_unconfirmed_order(existing_record):
             continue
-        progression = compute_city_progression(str(source.get("citySlug")), live_orders, target_date)
-        planned_entries.append({"stepIndex": int(progression["stepIndex"])})
+        progression = compute_city_progression(
+            str(source.get("citySlug")),
+            live_orders,
+            target_date,
+            normalize_offset(source.get("temperatureOffsetC")),
+        )
+        offset = normalize_offset(source.get("temperatureOffsetC"))
+        sequence = get_offset_stake_settings(offset)["sequence"]
+        planned_entries.append(
+            {
+                "offset": offset,
+                "stepIndex": int(progression["stepIndex"]),
+                "stakeUsd": sequence[min(int(progression["stepIndex"]), len(sequence) - 1)],
+            }
+        )
 
-    base_one_sequence = build_stake_sequence(1)
-    base_one_required = round(
-        sum(base_one_sequence[min(entry["stepIndex"], len(base_one_sequence) - 1)] for entry in planned_entries),
-        6,
-    )
-    if not planned_entries:
-        effective_base = configured_base
-    elif base_one_required <= 0:
-        effective_base = 1
-    elif balance_usd == float("inf"):
-        effective_base = configured_base
-    else:
-        affordable_base = int(float(balance_usd) // base_one_required)
-        effective_base = max(1, min(configured_base, affordable_base))
-
-    effective_sequence = build_stake_sequence(effective_base)
-    configured_sequence = build_stake_sequence(configured_base)
-    required_stake = round(base_one_required * effective_base, 6)
-    downgraded = effective_base < configured_base
+    required_stake = round(sum(entry["stakeUsd"] for entry in planned_entries), 6)
+    downgraded = False
+    sequences_by_offset = {
+        str(offset): get_offset_stake_settings(offset)["sequence"]
+        for offset in sorted(OFFSET_OPTIONS)
+    }
     return {
-        "configuredBaseStakeUsd": float(configured_base),
-        "effectiveBaseStakeUsd": float(effective_base),
-        "configuredSequence": configured_sequence,
-        "sequence": effective_sequence,
-        "configuredSequenceLabel": format_stake_sequence(configured_sequence),
-        "effectiveSequenceLabel": format_stake_sequence(effective_sequence),
+        "configuredBaseStakeUsd": None,
+        "effectiveBaseStakeUsd": None,
+        "configuredSequence": None,
+        "sequence": None,
+        "sequencesByOffset": sequences_by_offset,
+        "configuredSequenceLabel": "per-offset",
+        "effectiveSequenceLabel": "per-offset",
         "balanceUsd": round_money(balance_usd, 6) if balance_usd != float("inf") else None,
-        "baseOneRequiredStakeUsd": base_one_required,
+        "baseOneRequiredStakeUsd": required_stake,
         "requiredStakeUsd": required_stake,
         "plannedOrderCount": len(planned_entries),
         "downgraded": downgraded,
-        "downgradeReason": "balance-insufficient-for-configured-base" if downgraded else None,
+        "downgradeReason": None,
     }
 
 
@@ -540,6 +679,7 @@ def build_live_record(
         "forecastMinTempC": source.get("forecastMinTempC"),
         "forecastMaxTempC": source.get("forecastMaxTempC"),
         "targetTempC": source.get("targetTempC"),
+        "temperatureOffsetC": normalize_offset(source.get("temperatureOffsetC")),
         "dayWeather": source.get("dayWeather"),
         "nightWeather": source.get("nightWeather"),
         "eventSlug": source.get("eventSlug"),
@@ -547,6 +687,9 @@ def build_live_record(
         "marketSlug": source.get("marketSlug"),
         "marketTitle": source.get("marketTitle"),
         "marketQuestion": source.get("marketQuestion"),
+        "marketSelectionMode": source.get("marketSelectionMode"),
+        "marketBucketKind": source.get("marketBucketKind"),
+        "marketBucketValue": source.get("marketBucketValue"),
         "capturedAt": source.get("capturedAt"),
         "placedAt": placed_at,
         "tokenId": token_id,
@@ -612,6 +755,11 @@ def build_high_price_skip_record(
             "buyNoPrice": current_no_price,
             "recordedBuyNoPrice": source.get("buyNoPrice"),
             "priceCap": price_cap,
+            "temperatureOffsetC": normalize_offset(source.get("temperatureOffsetC")),
+            "targetTempC": source.get("targetTempC"),
+            "marketSelectionMode": source.get("marketSelectionMode"),
+            "marketBucketKind": source.get("marketBucketKind"),
+            "marketBucketValue": source.get("marketBucketValue"),
             "requestedStakeUsd": stake["stakeUsd"],
             "estimatedShares": round_money(float(stake["stakeUsd"]) / float(current_no_price), 6),
             "estimatedNoWinPayoutUsd": round_money(float(stake["stakeUsd"]) / float(current_no_price), 6),
@@ -654,6 +802,12 @@ def build_high_price_skip_record(
 
 def main() -> int:
     target_date = today_ymd()
+    if LIVE_STRATEGY_CONFIG["executionMode"] != "live":
+        print(
+            "Weather live order disabled by config "
+            f"mode={LIVE_STRATEGY_CONFIG['executionMode']} offsets={LIVE_STRATEGY_CONFIG['temperatureOffsets']}"
+        )
+        return 0
     weather_records = read_json(WEATHER_RECORDS_PATH, [])
     live_orders = read_json(LIVE_ORDERS_PATH, [])
     if not isinstance(weather_records, list):
@@ -661,18 +815,13 @@ def main() -> int:
     if not isinstance(live_orders, list):
         live_orders = []
 
-    candidates = [
-        item
-        for item in weather_records
-        if item.get("date") == target_date
-        and item.get("captureSlotId") == CAPTURE_SLOT_ID
-        and item.get("marketSlug")
-        and item.get("eventSlug")
-        and str(item.get("status") or "").lower() != "resolved"
-        and float(item.get("buyNoPrice") or 0) < 1
-        and float(item.get("buyNoPrice") or 0) <= MAX_NO_PRICE
-    ]
-    candidates.sort(key=lambda item: str(item.get("cityZh") or item.get("citySlug") or ""))
+    candidates = expand_weather_candidates(weather_records, target_date)
+    candidates.sort(
+        key=lambda item: (
+            str(item.get("cityZh") or item.get("citySlug") or ""),
+            normalize_offset(item.get("temperatureOffsetC")),
+        )
+    )
     if not candidates:
         print(f"No weather candidates for {target_date} slot={CAPTURE_SLOT_ID}")
         return 1
@@ -690,8 +839,8 @@ def main() -> int:
     stake_plan = build_balance_aware_stake_plan(candidates, live_orders, existing_by_key, target_date, balance_usd)
     print(
         "STAKE_PLAN "
-        f"date={target_date} configured={stake_plan['configuredBaseStakeUsd']:.0f} "
-        f"effective={stake_plan['effectiveBaseStakeUsd']:.0f} "
+        f"date={target_date} configured=per-offset "
+        f"effective=per-offset "
         f"orders={stake_plan['plannedOrderCount']} "
         f"base1_required=${stake_plan['baseOneRequiredStakeUsd']:.3f} "
         f"required=${stake_plan['requiredStakeUsd']:.3f} "
@@ -718,7 +867,13 @@ def main() -> int:
 
         live_record = None
         try:
-            stake = compute_city_stake(str(source.get("citySlug")), live_orders, target_date, stake_plan)
+            stake = compute_city_stake(
+                str(source.get("citySlug")),
+                live_orders,
+                target_date,
+                normalize_offset(source.get("temperatureOffsetC")),
+                stake_plan,
+            )
             event = order_engine.fetch_event(str(source.get("eventSlug")))
             if not event:
                 raise RuntimeError(f"event not found: {source.get('eventSlug')}")
@@ -761,6 +916,11 @@ def main() -> int:
                         "buyNoPrice": current_no_price or source.get("buyNoPrice"),
                         "recordedBuyNoPrice": source.get("buyNoPrice"),
                         "priceCap": price_cap,
+                        "temperatureOffsetC": normalize_offset(source.get("temperatureOffsetC")),
+                        "targetTempC": source.get("targetTempC"),
+                        "marketSelectionMode": source.get("marketSelectionMode"),
+                        "marketBucketKind": source.get("marketBucketKind"),
+                        "marketBucketValue": source.get("marketBucketValue"),
                         "requestedStakeUsd": stake["stakeUsd"],
                         "estimatedShares": round_money(float(stake["stakeUsd"]) / float(current_no_price), 6),
                         "estimatedNoWinPayoutUsd": round_money(

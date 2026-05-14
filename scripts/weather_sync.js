@@ -8,6 +8,7 @@ const INTERVAL_MS = Number(process.env.WEATHER_SYNC_INTERVAL_MS || 5 * 60 * 1000
 const LOCKS_DIR = path.join(ROOT_DIR, "data", "locks");
 const LOCK_PATH = path.join(LOCKS_DIR, "weather-sync.lock.json");
 const WEATHER_LIVE_RECORDS_PATH = path.join(ROOT_DIR, "data", "weather_predictions", "live-orders.json");
+const WEATHER_CONFIG_PATH = path.join(ROOT_DIR, "data", "weather_predictions", "config.json");
 const PYTHON_BIN = process.env.PYTHON || "python";
 const WEATHER_LIVE_ORDER_SCRIPT = path.join(ROOT_DIR, "scripts", "weather_live_order.py");
 const WEATHER_LIVE_RECONCILE_SCRIPT = path.join(ROOT_DIR, "scripts", "weather_reconcile_live_orders.py");
@@ -101,10 +102,47 @@ function isTradeableWeatherRecord(record, localDate) {
   );
 }
 
+function readWeatherLiveConfig() {
+  const config = readJson(WEATHER_CONFIG_PATH) || {};
+  const mode = ["simulation", "live"].includes(String(config.executionMode || "").toLowerCase())
+    ? String(config.executionMode).toLowerCase()
+    : "live";
+  const offsets = Array.isArray(config.temperatureOffsets)
+    ? config.temperatureOffsets
+        .map((item) => Number(item))
+        .filter((item, index, array) => [-1, 0, 1].includes(item) && array.indexOf(item) === index)
+    : [0];
+  return { mode, offsets: offsets.length ? offsets : [0] };
+}
+
 function countTodayWeatherCandidates(snapshot) {
-  return (snapshot.records || []).filter((record) =>
-    isTradeableWeatherRecord(record, snapshot.localDate),
-  ).length;
+  const config = readWeatherLiveConfig();
+  if (config.mode !== "live") {
+    return 0;
+  }
+  const enabledOffsets = new Set(config.offsets);
+  return (snapshot.records || []).reduce((total, record) => {
+    if (record?.date !== snapshot.localDate || record?.captureSlotId !== "00" || !record?.eventSlug) {
+      return total;
+    }
+    const candidates = Array.isArray(record.candidateMarkets) ? record.candidateMarkets : [];
+    if (candidates.length) {
+      return (
+        total +
+        candidates.filter((candidate) => {
+          const noPrice = Number(candidate?.buyNoPrice);
+          return (
+            enabledOffsets.has(Number(candidate?.temperatureOffsetC)) &&
+            candidate?.marketSlug &&
+            Number.isFinite(noPrice) &&
+            noPrice > 0 &&
+            noPrice <= WEATHER_LIVE_MAX_NO_PRICE
+          );
+        }).length
+      );
+    }
+    return total + (enabledOffsets.has(Number(record?.temperatureOffsetC || 0)) && isTradeableWeatherRecord(record, snapshot.localDate) ? 1 : 0);
+  }, 0);
 }
 
 function todayLiveOrderRecords(snapshot) {
@@ -338,8 +376,8 @@ async function runOnce() {
       `liveNet=${snapshot.liveOrders?.summary?.overall?.netPnlUsd ?? 0} ` +
       `midday95Today=${snapshot.middayNo95?.summary?.today?.records ?? 0} ` +
       `midday95Net=${snapshot.middayNo95?.summary?.overall?.netPnlUsd ?? 0} ` +
-      `thresholdSimToday=${snapshot.thresholdSim?.summary?.today?.records ?? 0} ` +
-      `thresholdSimNet=${snapshot.thresholdSim?.summary?.overall?.netPnlUsd ?? 0}`,
+      `offsetSimToday=${snapshot.offsetSimulation?.summary?.today?.records ?? 0} ` +
+      `offsetSimNet=${snapshot.offsetSimulation?.summary?.overall?.netPnlUsd ?? 0}`,
   );
 }
 

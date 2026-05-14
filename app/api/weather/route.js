@@ -55,6 +55,9 @@ export async function POST(request) {
     }
     const config = await writeWeatherLiveConfig({
       liveBaseStake: body?.liveBaseStake,
+      temperatureOffsets: body?.temperatureOffsets,
+      offsetStrategies: body?.offsetStrategies,
+      executionMode: body?.executionMode,
     });
     return NextResponse.json(
       {

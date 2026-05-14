@@ -108,6 +108,27 @@ function formatWeatherPair(row) {
   return parts.length ? parts.join(" / ") : "--";
 }
 
+function getWeatherOffsetCandidates(weather) {
+  const candidates = Array.isArray(weather?.candidateMarkets) ? weather.candidateMarkets : [];
+  if (candidates.length) {
+    return candidates.map((candidate) => ({
+      ...weather,
+      ...candidate,
+      key: `${weather.key}:offset:${candidate.temperatureOffsetC}:${candidate.marketSlug}`,
+      status: weather.status,
+      result: weather.result,
+      payoutUsd: null,
+      pnlUsd: null,
+    }));
+  }
+  return [
+    {
+      ...weather,
+      temperatureOffsetC: Number(weather?.temperatureOffsetC) || 0,
+    },
+  ];
+}
+
 function getOrderAttemptCount(row) {
   return Array.isArray(row?.orderAttempts) && row.orderAttempts.length > 0
     ? row.orderAttempts.length
@@ -174,6 +195,7 @@ function getLiveStatusDetail(row) {
 
 function buildTodayWeatherDetailRows(snapshot, liveRecords) {
   const todayYmd = snapshot.localDate;
+  const enabledOffsets = new Set(snapshot.liveConfig?.temperatureOffsets || [0]);
   const liveMap = new Map(
     (liveRecords || [])
       .filter((item) => item.date === todayYmd)
@@ -182,6 +204,8 @@ function buildTodayWeatherDetailRows(snapshot, liveRecords) {
 
   return (snapshot.records || [])
     .filter((item) => item.date === todayYmd && item.captureSlotId === "00")
+    .flatMap((weather) => getWeatherOffsetCandidates(weather))
+    .filter((weather) => enabledOffsets.has(Number(weather.temperatureOffsetC) || 0))
     .map((weather) => {
       const live = liveMap.get(`${weather.citySlug}:${weather.marketSlug}`);
       if (live) {
@@ -209,10 +233,8 @@ function buildTodayWeatherDetailRows(snapshot, liveRecords) {
       };
     })
     .sort((left, right) =>
-      String(left.cityZh || left.citySlug || "").localeCompare(
-        String(right.cityZh || right.citySlug || ""),
-        "zh-CN",
-      ),
+      String(left.cityZh || left.citySlug || "").localeCompare(String(right.cityZh || right.citySlug || ""), "zh-CN") ||
+      (Number(left.temperatureOffsetC) || 0) - (Number(right.temperatureOffsetC) || 0),
     );
 }
 
@@ -320,7 +342,9 @@ function LiveRecordTable({ title, rows }) {
                     <div className="text-base font-semibold text-neutral-950">
                       {row.forecastMinTempC}~{row.forecastMaxTempC}
                     </div>
-                    <div className="mt-1 text-sm text-[var(--ink-soft)]">目标高温 {row.targetTempC}°C</div>
+                    <div className="mt-1 text-sm text-[var(--ink-soft)]">
+                      Offset {Number(row.temperatureOffsetC) > 0 ? "+" : ""}{Number(row.temperatureOffsetC) || 0}C / 目标 {row.targetTempC}C
+                    </div>
                     <div className="text-sm text-[var(--ink-soft)]">{formatWeatherPair(row)}</div>
                   </td>
                   <td className="px-5 py-4">
@@ -407,8 +431,10 @@ export async function WeatherSectionPanel() {
 
           <WeatherLiveControls
             currentBaseStake={liveConfig.liveBaseStake || 1}
-            sequenceLabel={liveConfig.liveSequenceLabel || "1-2-2-3-5"}
             serviceStatus={snapshot.serviceStatus}
+            executionMode={liveConfig.executionMode || "live"}
+            temperatureOffsets={liveConfig.temperatureOffsets || [0]}
+            offsetStrategies={liveConfig.offsetStrategies || {}}
           />
         </div>
       </section>

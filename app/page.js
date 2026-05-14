@@ -47,8 +47,8 @@ function WeatherTabs({ currentQuery }) {
     },
     {
       id: "simulation",
-      label: "模拟观察",
-      helper: "10/11/12/13 点多阈值模拟单",
+      label: "策略收益",
+      helper: "-1 / 0 / +1 温度偏移模拟收益",
     },
   ];
 

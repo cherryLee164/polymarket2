@@ -71,3 +71,12 @@
 ## Weather Rotation Simulation
 - Started a standalone simulation task for overseas 18:00 BJT and domestic next-day 06:00 BJT weather rotation.
 - User explicitly required existing weather/live behavior to remain untouched.
+
+## Weather Offset Strategies
+- Replaced the old weather threshold simulation UI with `-1C / 0C / +1C` offset strategy reporting.
+- Added weather config fields for `executionMode` (`simulation` or `live`) and selected `temperatureOffsets`.
+- Expanded weather config so `-1C`, `0C`, and `+1C` each have independent enablement, base stake, and multiplier sequence.
+- Changed the default weather live multiplier sequence from `1-2-2-3-5` to `1-2-2-2-3`.
+- Weather records now store offset candidate markets when available; old current-day records can be backfilled with candidates during sync.
+- Weather live ordering now expands selected offsets and computes progression independently by `citySlug + temperatureOffsetC`.
+- Verified `node --check`, `python -m py_compile`, targeted ESLint, offset snapshot output, and localhost simulation page content.
