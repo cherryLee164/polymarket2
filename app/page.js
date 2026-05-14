@@ -177,7 +177,7 @@ export default async function Home({ searchParams }) {
           <>
             <WeatherTabs currentQuery={currentQuery} />
             {weatherTab === "review" ? <WeatherReviewPanel /> : null}
-            {weatherTab === "simulation" ? <WeatherSimulationPanel currentQuery={currentQuery} /> : null}
+            {weatherTab === "simulation" ? <WeatherSimulationPanel /> : null}
             {weatherTab === "live" ? <WeatherSectionPanel /> : null}
           </>
         ) : (
