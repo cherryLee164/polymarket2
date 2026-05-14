@@ -37,7 +37,7 @@ function sequenceLabel(baseStake, multipliers) {
     .join("-");
 }
 
-function normalizeStrategies(offsetStrategies = {}, temperatureOffsets = [0], currentBaseStake = 1) {
+function normalizeStrategies(offsetStrategies = {}, temperatureOffsets = [0], currentBaseStake = 1, executionMode = "live") {
   const enabled = new Set((Array.isArray(temperatureOffsets) ? temperatureOffsets : [0]).map((item) => Number(item)));
   const normalized = {};
   for (const option of OFFSET_OPTIONS) {
@@ -45,6 +45,7 @@ function normalizeStrategies(offsetStrategies = {}, temperatureOffsets = [0], cu
     normalized[option.key] = {
       offset: option.value,
       enabled: Boolean(raw.enabled ?? enabled.has(option.value)),
+      mode: raw.mode || executionMode || "live",
       baseStake: clampBaseStake(raw.baseStake ?? currentBaseStake),
       multiplierText: parseMultipliers(raw.multipliers || DEFAULT_MULTIPLIERS).join("-"),
     };
@@ -76,14 +77,14 @@ export function WeatherLiveControls({
   const [open, setOpen] = useState(false);
   const [modeValue, setModeValue] = useState(executionMode === "simulation" ? "simulation" : "live");
   const [strategyValues, setStrategyValues] = useState(() =>
-    normalizeStrategies(offsetStrategies, temperatureOffsets, currentBaseStake),
+    normalizeStrategies(offsetStrategies, temperatureOffsets, currentBaseStake, executionMode),
   );
   const [pending, setPending] = useState(false);
   const [actionPending, setActionPending] = useState("");
 
   useEffect(() => {
     setModeValue(executionMode === "simulation" ? "simulation" : "live");
-    setStrategyValues(normalizeStrategies(offsetStrategies, temperatureOffsets, currentBaseStake));
+    setStrategyValues(normalizeStrategies(offsetStrategies, temperatureOffsets, currentBaseStake, executionMode));
   }, [currentBaseStake, executionMode, offsetStrategies, temperatureOffsets]);
 
   function updateStrategy(key, patch) {
@@ -113,6 +114,7 @@ export function WeatherLiveControls({
         {
           offset: Number(strategy.offset),
           enabled: Boolean(strategy.enabled),
+          mode: strategy.mode || "live",
           baseStake: clampBaseStake(strategy.baseStake),
           multipliers: parseMultipliers(strategy.multiplierText),
         },
@@ -278,22 +280,35 @@ export function WeatherLiveControls({
                           : "border-[var(--line)] bg-white/70"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-xs uppercase tracking-[0.24em] text-[var(--ink-soft)]">Offset</p>
                           <h4 className="mt-1 text-2xl font-semibold text-neutral-950">{option.label}</h4>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => updateStrategy(option.key, { enabled: !active })}
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                            active
-                              ? "border-[var(--accent-strong)] bg-white text-neutral-950"
-                              : "border-[var(--line)] text-[var(--ink-soft)]"
-                          }`}
-                        >
-                          {active ? "启用" : "停用"}
-                        </button>
+                        <div className="flex flex-col items-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => updateStrategy(option.key, { enabled: !active })}
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                              active
+                                ? "border-[var(--accent-strong)] bg-white text-neutral-950"
+                                : "border-[var(--line)] text-[var(--ink-soft)]"
+                            }`}
+                          >
+                            {active ? "启用" : "停用"}
+                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs font-semibold ${strategy?.mode !== "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>模拟</span>
+                            <button
+                              type="button"
+                              onClick={() => updateStrategy(option.key, { mode: strategy?.mode === "live" ? "simulation" : "live" })}
+                              className={`relative h-5 w-9 rounded-full transition ${strategy?.mode === "live" ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
+                            >
+                              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${strategy?.mode === "live" ? "translate-x-4" : "translate-x-0.5"}`} />
+                            </button>
+                            <span className={`text-xs font-semibold ${strategy?.mode === "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>实盘</span>
+                          </div>
+                        </div>
                       </div>
 
                       <label className="mt-4 block">

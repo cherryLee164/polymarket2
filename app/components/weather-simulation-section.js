@@ -1,4 +1,7 @@
-import { getWeatherDashboardSnapshot } from "@/lib/weather-trading-data";
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 function formatMoney(value, digits = 3) {
   const numeric = Number(value);
@@ -42,6 +45,30 @@ function toneClass(value) {
     return "text-neutral-950";
   }
   return numeric > 0 ? "text-[var(--signal-up)]" : "text-[var(--signal-down)]";
+}
+
+function ToggleSwitch({ value, onChange, labelLeft = "模拟", labelRight = "实盘" }) {
+  const active = value === "live";
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`text-xs font-semibold transition ${!active ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>
+        {labelLeft}
+      </span>
+      <button
+        type="button"
+        onClick={() => onChange(active ? "simulation" : "live")}
+        className={`relative h-6 w-10 rounded-full transition ${active ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
+        aria-label={active ? "切换到模拟模式" : "切换到实盘模式"}
+      >
+        <span
+          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${active ? "translate-x-5" : "translate-x-0.5"}`}
+        />
+      </button>
+      <span className={`text-xs font-semibold transition ${active ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>
+        {labelRight}
+      </span>
+    </div>
+  );
 }
 
 function aggregateRows(rows) {
@@ -96,7 +123,7 @@ function MetricCard({ label, value, helper, toneValue }) {
   );
 }
 
-function StrategyCards({ rows }) {
+function StrategyCards({ rows, onToggleMode }) {
   return (
     <section className="grid gap-3 md:grid-cols-3">
       {rows.map((row) => {
@@ -115,9 +142,10 @@ function StrategyCards({ rows }) {
                 <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">Offset</p>
                 <h3 className="mt-2 text-2xl font-semibold text-neutral-950">{row.label}</h3>
               </div>
-              <span className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-1 text-xs font-semibold text-neutral-800">
-                {row.selected ? "已选" : "观察"}
-              </span>
+              <ToggleSwitch
+                value={row.mode || "live"}
+                onChange={(newMode) => onToggleMode(row.temperatureOffsetC, newMode)}
+              />
             </div>
             <div className={`mt-4 text-3xl font-semibold ${toneClass(summary.netPnlUsd)}`}>
               {formatMoney(summary.netPnlUsd)}
@@ -242,13 +270,73 @@ function SimulationTable({ rows }) {
   );
 }
 
-export async function WeatherSimulationPanel() {
-  const snapshot = await getWeatherDashboardSnapshot({ sync: false });
-  const simulation = snapshot.offsetSimulation || snapshot.thresholdSim || {};
+export function WeatherSimulationPanel() {
+  const router = useRouter();
+  const [snapshot, setSnapshot] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadData = useCallback(async () => {
+    try {
+      const res = await fetch("/api/weather");
+      if (!res.ok) throw new Error("fetch-failed");
+      const data = await res.json();
+      setSnapshot(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleToggleMode = useCallback(
+    async (offset, newMode) => {
+      if (!snapshot?.liveConfig) return;
+      const currentConfig = snapshot.liveConfig;
+      const offsetStrategies = { ...currentConfig.offsetStrategies };
+      const key = String(offset);
+      offsetStrategies[key] = {
+        ...(offsetStrategies[key] || {}),
+        offset,
+        mode: newMode,
+      };
+
+      try {
+        const res = await fetch("/api/weather", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ offsetStrategies }),
+        });
+        if (res.ok) {
+          const fresh = await fetch("/api/weather").then((r) => r.json());
+          setSnapshot(fresh);
+          router.refresh();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [snapshot, router],
+  );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-sm text-[var(--ink-soft)]">
+        策略收益数据加载中…
+      </div>
+    );
+  }
+
+  const simulation = snapshot?.offsetSimulation || snapshot?.thresholdSim || {};
   const selectedOffsets = new Set(simulation.selectedOffsets || [0]);
-  const selectedRows = (simulation.records || []).filter((row) => selectedOffsets.has(Number(row.temperatureOffsetC)));
+  const selectedRows = (simulation.records || []).filter((row) =>
+    selectedOffsets.has(Number(row.temperatureOffsetC)),
+  );
   const selectedSummary = aggregateRows(selectedRows);
-  const todayRows = selectedRows.filter((row) => row.date === snapshot.localDate);
+  const todayRows = selectedRows.filter((row) => row.date === snapshot?.localDate);
   const cityRows = aggregateCityRows(simulation.records || []);
 
   return (
@@ -263,17 +351,17 @@ export async function WeatherSimulationPanel() {
             </p>
           </div>
           <div className="text-xs text-[var(--ink-soft)]">
-            当前模式 {simulation.executionMode === "simulation" ? "模拟" : "实战"} / 单笔 {formatMoney(simulation.stakeUsd || 1)}
+            单笔 {formatMoney(simulation.stakeUsd || 1)}
           </div>
         </div>
       </section>
 
-      <StrategyCards rows={simulation.strategyRows || []} />
+      <StrategyCards rows={simulation.strategyRows || []} onToggleMode={handleToggleMode} />
 
       <section className="grid gap-3 md:grid-cols-4">
         <MetricCard label="已选组合收益" value={formatMoney(selectedSummary.netPnlUsd)} helper={`${selectedSummary.settledRecords} 已结算`} toneValue={selectedSummary.netPnlUsd} />
         <MetricCard label="已选组合 ROI" value={formatPercent(selectedSummary.roi)} helper={`${selectedSummary.records} 单累计`} toneValue={selectedSummary.roi} />
-        <MetricCard label="今日已选候选" value={`${todayRows.length}`} helper={snapshot.localDate} toneValue={0} />
+        <MetricCard label="今日已选候选" value={`${todayRows.length}`} helper={snapshot?.localDate || "--"} toneValue={0} />
         <MetricCard label="全部 offset 收益" value={formatMoney(simulation.summary?.overall?.netPnlUsd)} helper={`${simulation.summary?.overall?.records || 0} 单累计`} toneValue={simulation.summary?.overall?.netPnlUsd} />
       </section>
 
