@@ -8,7 +8,9 @@ const OFFSET_OPTIONS = [
   { value: 0, key: "0", label: "0C" },
   { value: 1, key: "1", label: "+1C" },
 ];
-const DEFAULT_MULTIPLIERS = [1, 2, 2, 2, 3];
+// 旧序列: [1, 2, 2, 2, 3] — 递进翻倍模式，已暂停使用
+// const DEFAULT_MULTIPLIERS = [1, 2, 2, 2, 3];
+const DEFAULT_MULTIPLIERS = [1, 1, 1, 1, 1];
 
 function clampBaseStake(value) {
   const numeric = Number(value);
@@ -247,21 +249,19 @@ export function WeatherLiveControls({
             <form className="mt-5 space-y-5" onSubmit={handleSubmit}>
               <div>
                 <span className="text-sm text-[var(--ink-soft)]">运行模式</span>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {["simulation", "live"].map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setModeValue(mode)}
-                      className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
-                        modeValue === mode
-                          ? "border-[var(--accent-strong)] bg-[rgba(214,122,67,0.16)] text-neutral-950"
-                          : "border-[var(--line)] bg-white text-[var(--ink-soft)]"
-                      }`}
-                    >
-                      {mode === "simulation" ? "模拟" : "实战"}
-                    </button>
-                  ))}
+                <div className="mt-3 flex items-center gap-3">
+                  <span className={`text-sm font-semibold transition ${modeValue === "simulation" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>模拟</span>
+                  <button
+                    type="button"
+                    onClick={() => setModeValue(modeValue === "live" ? "simulation" : "live")}
+                    className={`relative h-7 w-12 rounded-full transition ${modeValue === "live" ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
+                    aria-label={modeValue === "live" ? "切换到模拟模式" : "切换到实盘模式"}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${modeValue === "live" ? "translate-x-5" : "translate-x-0.5"}`}
+                    />
+                  </button>
+                  <span className={`text-sm font-semibold transition ${modeValue === "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>实战</span>
                 </div>
               </div>
 

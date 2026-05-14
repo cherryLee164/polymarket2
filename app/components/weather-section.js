@@ -218,7 +218,7 @@ function buildTodayWeatherDetailRows(snapshot, liveRecords) {
       }
       return {
         ...weather,
-        key: `${weather.key}:weather-only`,
+        key: `${weather.key}:weather-only:${weather.temperatureOffsetC ?? 0}:${weather.marketSlug || "no-market"}`,
         placedAt: null,
         stakeUsd: 0,
         requestedStakeUsd: Number(weather.progressiveStakeUsd ?? 1) || 1,

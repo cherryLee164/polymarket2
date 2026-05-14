@@ -103,9 +103,10 @@ def normalize_base_stake(value: Any) -> int:
     return numeric if numeric in {1, 2, 3, 4, 5} else 1
 
 
+# 旧序列: (1, 2, 2, 2, 3) — 递进翻倍模式，已暂停使用
 def build_stake_sequence(base_stake: Any) -> List[float]:
     base = normalize_base_stake(base_stake)
-    return [float(base * multiplier) for multiplier in (1, 2, 2, 2, 3)]
+    return [float(base * multiplier) for multiplier in (1, 1, 1, 1, 1)]
 
 
 def normalize_multipliers(value: Any) -> List[float]:
@@ -118,7 +119,8 @@ def normalize_multipliers(value: Any) -> List[float]:
         numeric = as_float(item)
         if numeric > 0 and numeric <= 20:
             multipliers.append(float(numeric))
-    return multipliers[:8] if multipliers else [1.0, 2.0, 2.0, 2.0, 3.0]
+    # 旧默认: [1.0, 2.0, 2.0, 2.0, 3.0] — 递进翻倍模式，已暂停使用
+    return multipliers[:8] if multipliers else [1.0, 1.0, 1.0, 1.0, 1.0]
 
 
 def build_stake_sequence_from_parts(base_stake: Any, multipliers: Any) -> List[float]:
@@ -146,7 +148,8 @@ def read_live_stake_settings() -> Dict[str, Any]:
                 parsed.append(float(item))
             except Exception:
                 continue
-        sequence = parsed or [1.0, 2.0, 2.0, 2.0, 3.0]
+        # 旧默认: [1.0, 2.0, 2.0, 2.0, 3.0] — 递进翻倍模式，已暂停使用
+        sequence = parsed or [1.0, 1.0, 1.0, 1.0, 1.0]
         base = normalize_base_stake(sequence[0] if sequence else 1)
     else:
         config = read_json(WEATHER_CONFIG_PATH, {})
