@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 import time
@@ -13,6 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = ROOT_DIR / "data" / "weather_predictions"
 WEATHER_RECORDS_PATH = DATA_DIR / "records.json"
 LIVE_ORDERS_PATH = DATA_DIR / "live-orders.json"
+SIM_ORDERS_PATH = DATA_DIR / "sim-orders.json"
 WEATHER_CONFIG_PATH = DATA_DIR / "config.json"
 TZ = ZoneInfo("Asia/Shanghai")
 STRATEGY_ID = "weather-live-125"
@@ -29,7 +31,8 @@ def env_float(name: str, default: float) -> float:
 CAPTURE_SLOT_ID = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_ID", "00")
 CAPTURE_SLOT_LABEL = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_LABEL", "00:10")
 MAX_PRICE_CAP = env_float("WEATHER_LIVE_MAX_PRICE_CAP", 0.95)
-MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.95)
+# 实盘测试：No 价格超过 90 美分不买入
+MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.90)
 HIGH_PRICE_SKIP_REASON = f"no-price-above-{MAX_NO_PRICE:.2f}"
 USE_MAX_PRICE_CAP = str(os.getenv("WEATHER_LIVE_USE_MAX_PRICE_CAP", "true")).strip().lower() in {
     "1",
@@ -37,7 +40,16 @@ USE_MAX_PRICE_CAP = str(os.getenv("WEATHER_LIVE_USE_MAX_PRICE_CAP", "true")).str
     "yes",
     "on",
 }
-POSITION_CONFIRM_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_CONFIRM_WAIT_SECONDS", "1.5"))
+# 下单后等待 10 分钟再检测订单是否成功，避免 API 报错但订单已成交导致重复下单
+POSITION_CONFIRM_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_CONFIRM_WAIT_SECONDS", "600"))
+# 实盘下单截止时间：北京时间 12:00 后不再下当天真实单
+LIVE_ORDER_DEADLINE_HOUR = int(os.getenv("WEATHER_LIVE_DEADLINE_HOUR", "12"))
+# 虚拟测试账户：初始资金 10 美元，亏完不再下单（程序不结束）
+VIRTUAL_ACCOUNT_INITIAL_USD = float(os.getenv("WEATHER_LIVE_VIRTUAL_INITIAL_USD", "10"))
+# 实盘下单白名单：只对白名单内的城市真实下单，其余城市保持原样（模拟/不下单）
+LIVE_ORDER_CITY_SLUGS = set(
+    str(os.getenv("WEATHER_LIVE_CITY_SLUGS", "beijing")).split(",")
+)
 MAX_ORDER_ATTEMPTS = max(1, int(os.getenv("WEATHER_LIVE_MAX_ORDER_ATTEMPTS", "288")))
 ORDER_RETRY_AFTER_SECONDS = float(os.getenv("WEATHER_LIVE_RETRY_AFTER_SECONDS", "300"))
 ORDER_RETRY_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_ORDER_RETRY_WAIT_SECONDS", "3"))
@@ -267,6 +279,28 @@ def normalize_offset(value: Any) -> int:
     return numeric if numeric in OFFSET_OPTIONS else 0
 
 
+def build_candidates_from_sim_orders(sim_orders: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
+    """从 sim-orders.json 读取今天的订单作为 live 下单 candidates，保证 live 与 sim 策略完全一致。"""
+    candidates: List[Dict[str, Any]] = []
+    for order in sim_orders:
+        if not isinstance(order, dict):
+            continue
+        if str(order.get("date")) != target_date:
+            continue
+        if str(order.get("captureSlotId") or "00") != CAPTURE_SLOT_ID:
+            continue
+        # 只复制未跳过、有市场信息的订单
+        if not order.get("marketSlug"):
+            continue
+        no_price = as_float(order.get("buyNoPrice"))
+        if no_price <= 0 or no_price >= 1 or no_price > MAX_NO_PRICE:
+            continue
+        source = dict(order)
+        source["key"] = order_key(source)
+        candidates.append(source)
+    return candidates
+
+
 def expand_weather_candidates(records: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
     enabled_offsets = set(LIVE_STRATEGY_CONFIG["temperatureOffsets"])
     expanded: List[Dict[str, Any]] = []
@@ -280,8 +314,13 @@ def expand_weather_candidates(records: List[Dict[str, Any]], target_date: str) -
             continue
         candidate_markets = item.get("candidateMarkets")
         if isinstance(candidate_markets, list) and candidate_markets:
+            # 只选与原始预测温度 targetTempC 匹配的主市场，和 sim-orders 保持一致
+            target_temp = as_float(item.get("targetTempC"))
             for candidate in candidate_markets:
                 if not isinstance(candidate, dict):
+                    continue
+                cand_temp = as_float(candidate.get("targetTempC"))
+                if not math.isfinite(target_temp) or cand_temp != target_temp:
                     continue
                 offset = normalize_offset(candidate.get("temperatureOffsetC"))
                 if offset not in enabled_offsets:
@@ -390,6 +429,63 @@ def has_confirmed_fill(record: Dict[str, Any]) -> bool:
     return fill_status == "position-detected" and cost > 0 and shares > MIN_SUCCESS_SHARES
 
 
+def compute_city_filled_stake(live_orders: List[Dict[str, Any]], target_date: str, city_slug: str) -> float:
+    """计算某城市+某日已成交订单的总下注金额（spentUsd 或 stakeUsd）。
+    优先用 Polymarket 账户实际持仓判断，本地订单仅作辅助。"""
+    total = 0.0
+    for item in live_orders:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("date")) != target_date:
+            continue
+        if str(item.get("citySlug")) != city_slug:
+            continue
+        if not has_confirmed_fill(item):
+            continue
+        spent = as_float(item.get("spentUsd")) or as_float(item.get("stakeUsd"))
+        if spent > 0:
+            total += spent
+    return round(total, 6)
+
+
+def fetch_account_positions(trader) -> Dict[str, Dict[str, float]]:
+    """查询 Polymarket 账户实际持仓，返回 {token_id: {size, initialValue}} 字典。
+    initialValue 是实际下单花费的金额（成本）。"""
+    try:
+        proxy = getattr(trader, "funder", None) or getattr(trader, "proxy_address", None)
+        if not proxy:
+            return {}
+        positions = order_engine.fetch_user_positions(proxy, size_threshold=0)
+        result: Dict[str, Dict[str, float]] = {}
+        for pos in positions:
+            if not isinstance(pos, dict):
+                continue
+            token_id = str(pos.get("asset") or "")
+            try:
+                size = float(pos.get("size") or 0.0)
+            except Exception:
+                size = 0.0
+            try:
+                initial_value = float(pos.get("initialValue") or 0.0)
+            except Exception:
+                initial_value = 0.0
+            if token_id and (size > 0 or initial_value > 0):
+                result[token_id] = {
+                    "size": result.get(token_id, {}).get("size", 0.0) + size,
+                    "initialValue": result.get(token_id, {}).get("initialValue", 0.0) + initial_value,
+                }
+        return result
+    except Exception as exc:
+        print(f"WARN fetch_account_positions failed: {exc}")
+        return {}
+
+
+def compute_actual_filled_stake(source: Dict[str, Any], account_positions: Dict[str, Dict[str, float]], current_token_id: str) -> float:
+    """根据账户实际持仓计算已成交金额，用 initialValue（实际下单成本）。"""
+    pos_data = account_positions.get(current_token_id, {})
+    return round(pos_data.get("initialValue", 0.0), 6)
+
+
 def is_high_price_blocked(record: Dict[str, Any]) -> bool:
     return (
         str(record.get("fillStatus") or "").lower() == "price-above-limit"
@@ -473,6 +569,39 @@ def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
     if existing not in (None, ""):
         return round_money(existing, 6)
     return None
+
+
+def compute_virtual_account_balance(live_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """计算虚拟测试账户余额。
+
+    虚拟账户初始资金 10 美元。每笔已下单（active）扣减成本，
+    已结算订单按 accounting_pnl_usd 计入已实现盈亏。
+    余额 = 初始 + 已实现盈亏 - 在途订单锁定的本金。
+    亏完（余额 <= 0）则不再下单，但程序继续运行不结束。
+    """
+    realized_pnl = 0.0
+    locked_stake = 0.0
+    for record in live_orders:
+        status = str(record.get("status") or "").lower()
+        if status in {"failed", "skipped", "cancelled", "canceled", "no-fill"}:
+            continue
+        stake = accounting_stake_usd(record)
+        if stake <= 0:
+            continue
+        if status == "resolved":
+            pnl = accounting_pnl_usd(record)
+            if pnl is not None:
+                realized_pnl += float(pnl)
+        else:
+            # 在途订单：本金被锁定
+            locked_stake += stake
+    current = VIRTUAL_ACCOUNT_INITIAL_USD + realized_pnl - locked_stake
+    return {
+        "initialBalanceUsd": VIRTUAL_ACCOUNT_INITIAL_USD,
+        "currentBalanceUsd": round_money(current, 6) or 0.0,
+        "realizedPnlUsd": round_money(realized_pnl, 6) or 0.0,
+        "lockedStakeUsd": round_money(locked_stake, 6) or 0.0,
+    }
 
 
 def compute_city_progression(
@@ -805,6 +934,14 @@ def build_high_price_skip_record(
 
 def main() -> int:
     target_date = today_ymd()
+    # 实盘下单截止时间检查：北京时间 12:00 后不再下当天真实单
+    now_beijing = datetime.now(TZ)
+    if now_beijing.hour >= LIVE_ORDER_DEADLINE_HOUR:
+        print(
+            f"SKIP deadline passed {target_date} beijing_hour={now_beijing.hour} "
+            f"deadline={LIVE_ORDER_DEADLINE_HOUR}"
+        )
+        return 0
     if LIVE_STRATEGY_CONFIG["executionMode"] != "live":
         print(
             "Weather live order disabled by config "
@@ -813,12 +950,20 @@ def main() -> int:
         return 0
     weather_records = read_json(WEATHER_RECORDS_PATH, [])
     live_orders = read_json(LIVE_ORDERS_PATH, [])
+    sim_orders = read_json(SIM_ORDERS_PATH, [])
     if not isinstance(weather_records, list):
         raise RuntimeError("weather records file is not a list")
     if not isinstance(live_orders, list):
         live_orders = []
+    if not isinstance(sim_orders, list):
+        sim_orders = []
 
-    candidates = expand_weather_candidates(weather_records, target_date)
+    # 直接复用 sim-orders 的下单决策（跟昨天温差策略），保证 live 与 sim 完全一致
+    candidates = build_candidates_from_sim_orders(sim_orders, target_date)
+    candidates = [
+        c for c in candidates
+        if str(c.get("citySlug")) in LIVE_ORDER_CITY_SLUGS
+    ]
     candidates.sort(
         key=lambda item: (
             str(item.get("cityZh") or item.get("citySlug") or ""),
@@ -826,8 +971,8 @@ def main() -> int:
         )
     )
     if not candidates:
-        print(f"No weather candidates for {target_date} slot={CAPTURE_SLOT_ID}")
-        return 1
+        print(f"No weather candidates for {target_date} slot={CAPTURE_SLOT_ID} (whitelist={LIVE_ORDER_CITY_SLUGS})")
+        return 0
 
     existing_by_key = {
         item.get("key"): item
@@ -840,6 +985,7 @@ def main() -> int:
     balance_status = trader.get_balance_status()
     balance_usd = float(balance_status.get("balance") or 0.0)
     stake_plan = build_balance_aware_stake_plan(candidates, live_orders, existing_by_key, target_date, balance_usd)
+    virtual_account = compute_virtual_account_balance(live_orders)
     print(
         "STAKE_PLAN "
         f"date={target_date} configured=per-offset "
@@ -847,13 +993,20 @@ def main() -> int:
         f"orders={stake_plan['plannedOrderCount']} "
         f"base1_required=${stake_plan['baseOneRequiredStakeUsd']:.3f} "
         f"required=${stake_plan['requiredStakeUsd']:.3f} "
-        f"balance=${balance_usd:.3f}"
+        f"balance=${balance_usd:.3f} "
+        f"virtual_balance=${virtual_account['currentBalanceUsd']:.3f} "
+        f"virtual_realized_pnl=${virtual_account['realizedPnlUsd']:.3f} "
+        f"virtual_locked=${virtual_account['lockedStakeUsd']:.3f}"
     )
     results = []
 
     for source in candidates:
         key = order_key(source)
         city = source.get("cityZh") or source.get("citySlug")
+        # 实盘下单白名单：非白名单城市跳过，保持原样不下单
+        if str(source.get("citySlug")) not in LIVE_ORDER_CITY_SLUGS:
+            results.append({"city": city, "status": "skipped-not-whitelisted"})
+            continue
         existing_record = existing_by_key.get(key)
         if existing_record and has_confirmed_fill(existing_record):
             print(f"SKIP filled {city} {source.get('marketTitle')}")
@@ -877,6 +1030,7 @@ def main() -> int:
                 normalize_offset(source.get("temperatureOffsetC")),
                 stake_plan,
             )
+            # 先获取市场和 token，用于查账户实际持仓
             event = order_engine.fetch_event(str(source.get("eventSlug")))
             if not event:
                 raise RuntimeError(f"event not found: {source.get('eventSlug')}")
@@ -885,6 +1039,39 @@ def main() -> int:
             current_no_price = token["currentNoPrice"] or round_money(source.get("buyNoPrice"), 6)
             if not current_no_price or current_no_price <= 0:
                 raise RuntimeError("missing No price")
+            # 下单前等待2分钟，让之前的订单有时间成交并记录，避免重复下单
+            time.sleep(POSITION_CONFIRM_WAIT_SECONDS)
+            # 查 Polymarket 账户实际持仓，判断是否已下单
+            account_positions = fetch_account_positions(trader)
+            actual_filled = compute_actual_filled_stake(source, account_positions, str(token["tokenId"]))
+            configured_stake = float(stake.get("stakeUsd") or 0.0)
+            remaining_stake = round(max(0.0, configured_stake - actual_filled), 6)
+            pos_data = account_positions.get(str(token["tokenId"]), {})
+            print(
+                f"CHECK {city} {source.get('marketTitle')} "
+                f"position_size={pos_data.get('size', 0.0):.6f} "
+                f"position_cost=${pos_data.get('initialValue', 0.0):.3f} "
+                f"actual_filled=${actual_filled:.3f} target=${configured_stake:.3f} "
+                f"remaining=${remaining_stake:.3f}"
+            )
+            if remaining_stake <= 0:
+                print(
+                    f"SKIP already-filled {city} "
+                    f"actual_filled=${actual_filled:.3f} target=${configured_stake:.3f}"
+                )
+                results.append({"city": city, "status": "skipped-already-filled"})
+                continue
+            # 用补足差额作为本次下单金额
+            stake["stakeUsd"] = remaining_stake
+            # 虚拟测试账户余额检查：余额不足则跳过下单，但程序不结束
+            if virtual_account["currentBalanceUsd"] < remaining_stake:
+                print(
+                    f"SKIP virtual-account-empty {city} "
+                    f"virtual_balance=${virtual_account['currentBalanceUsd']:.3f} "
+                    f"stake=${remaining_stake:.3f}"
+                )
+                results.append({"city": city, "status": "skipped-virtual-empty"})
+                continue
             if USE_MAX_PRICE_CAP:
                 price_cap = MAX_PRICE_CAP
             else:
@@ -1089,7 +1276,7 @@ def main() -> int:
 
     bought = sum(1 for item in results if item["status"] == "pending")
     failed = sum(1 for item in results if item["status"] == "failed")
-    skipped = sum(1 for item in results if item["status"] in {"skipped-existing", "skipped-price"})
+    skipped = sum(1 for item in results if item["status"] in {"skipped-existing", "skipped-price", "skipped-virtual-empty", "skipped-not-whitelisted"})
     print(f"SUMMARY date={target_date} bought={bought} failed={failed} skipped={skipped}")
     return 0 if failed == 0 else 2
 
