@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 function formatMoney(value, digits = 3) {
   const numeric = Number(value);
@@ -23,7 +22,7 @@ function formatPercent(value) {
 
 function formatPrice(value) {
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}c` : "--";
+  return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}¢` : "--";
 }
 
 function formatShortDate(ymd) {
@@ -32,6 +31,17 @@ function formatShortDate(ymd) {
     return ymd || "--";
   }
   return `${month}/${day}`;
+}
+
+function formatDelta(value, unit) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "--";
+  }
+  const rendered = Math.round(numeric);
+  const sign = numeric > 0 ? "+" : "";
+  const suffix = unit === "fahrenheit" ? "°F" : "°C";
+  return `${sign}${rendered}${suffix}`;
 }
 
 function offsetLabel(value) {
@@ -45,30 +55,6 @@ function toneClass(value) {
     return "text-neutral-950";
   }
   return numeric > 0 ? "text-[var(--signal-up)]" : "text-[var(--signal-down)]";
-}
-
-function ToggleSwitch({ value, onChange, labelLeft = "模拟", labelRight = "实盘" }) {
-  const active = value === "live";
-  return (
-    <div className="flex items-center gap-2">
-      <span className={`text-xs font-semibold transition ${!active ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>
-        {labelLeft}
-      </span>
-      <button
-        type="button"
-        onClick={() => onChange(active ? "simulation" : "live")}
-        className={`relative h-6 w-10 rounded-full transition ${active ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
-        aria-label={active ? "切换到模拟模式" : "切换到实盘模式"}
-      >
-        <span
-          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${active ? "translate-x-5" : "translate-x-0.5"}`}
-        />
-      </button>
-      <span className={`text-xs font-semibold transition ${active ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>
-        {labelRight}
-      </span>
-    </div>
-  );
 }
 
 function aggregateRows(rows) {
@@ -87,33 +73,7 @@ function aggregateRows(rows) {
   };
 }
 
-function aggregateCityRows(rows) {
-  const map = new Map();
-  for (const row of rows) {
-    const key = `${row.citySlug}:${row.temperatureOffsetC}`;
-    const current = map.get(key) || {
-      citySlug: row.citySlug,
-      cityZh: row.cityZh || row.cityEn || row.citySlug,
-      temperatureOffsetC: row.temperatureOffsetC,
-      rows: [],
-    };
-    current.rows.push(row);
-    map.set(key, current);
-  }
-  return [...map.values()]
-    .map((item) => ({
-      ...item,
-      summary: aggregateRows(item.rows),
-    }))
-    .sort((left, right) => {
-      if (Number(right.summary.netPnlUsd) !== Number(left.summary.netPnlUsd)) {
-        return Number(right.summary.netPnlUsd) - Number(left.summary.netPnlUsd);
-      }
-      return String(left.cityZh || "").localeCompare(String(right.cityZh || ""), "zh-CN");
-    });
-}
-
-function MetricCard({ label, value, helper, toneValue }) {
+function SimMetricCard({ label, value, helper, toneValue }) {
   return (
     <article className="rounded-[1.25rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] px-4 py-3">
       <p className="text-xs text-[var(--ink-soft)]">{label}</p>
@@ -123,98 +83,11 @@ function MetricCard({ label, value, helper, toneValue }) {
   );
 }
 
-function StrategyCards({ rows, onToggleMode }) {
-  return (
-    <section className="grid gap-3 md:grid-cols-3">
-      {rows.map((row) => {
-        const summary = row.summary || {};
-        return (
-          <article
-            key={row.key}
-            className={`rounded-[1.45rem] border px-4 py-4 shadow-[var(--shadow)] ${
-              row.selected
-                ? "border-[var(--accent-strong)] bg-[rgba(214,122,67,0.14)]"
-                : "border-[var(--line)] bg-[var(--panel)]"
-            }`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">Offset</p>
-                <h3 className="mt-2 text-2xl font-semibold text-neutral-950">{row.label}</h3>
-              </div>
-              <ToggleSwitch
-                value={row.mode || "live"}
-                onChange={(newMode) => onToggleMode(row.temperatureOffsetC, newMode)}
-              />
-            </div>
-            <div className={`mt-4 text-3xl font-semibold ${toneClass(summary.netPnlUsd)}`}>
-              {formatMoney(summary.netPnlUsd)}
-            </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-[var(--ink-soft)]">
-              <div>ROI {formatPercent(summary.roi)}</div>
-              <div>赢 {summary.wins || 0}</div>
-              <div>输 {summary.losses || 0}</div>
-            </div>
-            <p className="mt-3 text-xs text-[var(--ink-soft)]">
-              {summary.settledRecords || 0} 已结算 / {summary.pending || 0} 待结算
-            </p>
-            <p className="mt-2 text-xs text-[var(--ink-soft)]">
-              实盘序列 {row.liveConfig?.sequenceLabel || "--"}
-            </p>
-          </article>
-        );
-      })}
-    </section>
-  );
-}
-
-function CityRanking({ rows }) {
-  return (
-    <section className="rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow)]">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <p className="font-display text-xs uppercase tracking-[0.34em] text-[var(--ink-soft)]">City Offset ROI</p>
-          <h3 className="mt-2 text-xl font-semibold text-neutral-950">城市策略排名</h3>
-        </div>
-        <p className="text-xs text-[var(--ink-soft)]">按城市和温度偏移独立统计</p>
-      </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-        {rows.length ? (
-          rows.slice(0, 18).map((row) => (
-            <article key={`${row.citySlug}:${row.temperatureOffsetC}`} className="rounded-[1.15rem] border border-[var(--line)] bg-white/70 px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-neutral-950">
-                    {row.cityZh} {offsetLabel(row.temperatureOffsetC)}
-                  </div>
-                  <div className="mt-1 text-xs text-[var(--ink-soft)]">
-                    {row.summary.records} 单 / {row.summary.settledRecords} 已结算
-                  </div>
-                </div>
-                <div className={`text-lg font-semibold ${toneClass(row.summary.netPnlUsd)}`}>
-                  {formatMoney(row.summary.netPnlUsd)}
-                </div>
-              </div>
-              <div className="mt-2 text-xs text-[var(--ink-soft)]">
-                ROI {formatPercent(row.summary.roi)} / 赢 {row.summary.wins} / 输 {row.summary.losses}
-              </div>
-            </article>
-          ))
-        ) : (
-          <div className="rounded-[1.15rem] border border-dashed border-[var(--line)] bg-white/50 px-4 py-6 text-sm text-[var(--ink-soft)] md:col-span-2 xl:col-span-3">
-            暂无可统计的 offset 模拟记录。
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SimulationTable({ rows }) {
+function SimulationTable({ title, rows, isFollowYesterday }) {
   return (
     <section className="overflow-hidden rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] shadow-[var(--shadow)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
-        <h3 className="font-display text-xl font-semibold tracking-[0.04em] text-neutral-950">策略明细</h3>
+        <h3 className="font-display text-xl font-semibold tracking-[0.04em] text-neutral-950">{title}</h3>
         <p className="text-xs text-[var(--ink-soft)]">{rows.length} 条</p>
       </div>
       <div className="overflow-x-auto">
@@ -223,6 +96,7 @@ function SimulationTable({ rows }) {
             <tr>
               <th className="px-4 py-3 font-medium">日期</th>
               <th className="px-4 py-3 font-medium">城市</th>
+              {isFollowYesterday && <th className="px-4 py-3 font-medium">昨天偏移</th>}
               <th className="px-4 py-3 font-medium">策略</th>
               <th className="px-4 py-3 font-medium">市场</th>
               <th className="px-4 py-3 font-medium">No 价格</th>
@@ -236,13 +110,18 @@ function SimulationTable({ rows }) {
                 <tr key={row.key} className="border-t border-[var(--line)] align-top">
                   <td className="px-4 py-3">{formatShortDate(row.date)}</td>
                   <td className="px-4 py-3">
-                    <div className="font-semibold text-neutral-950">{row.cityZh || row.cityEn}</div>
+                    <div className="font-semibold text-neutral-950">{row.cityZh}</div>
                     <div className="mt-1 text-xs text-[var(--ink-soft)]">{row.forecastTarget}</div>
                   </td>
+                  {isFollowYesterday && (
+                    <td className={`px-4 py-3 font-semibold ${toneClass(row.prevDateDeltaC)}`}>
+                      {Number.isFinite(row.prevDateDeltaC) ? formatDelta(row.prevDateDeltaC, row?.unit) : "--"}
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <div className="font-semibold text-neutral-950">{offsetLabel(row.temperatureOffsetC)}</div>
                     <div className="mt-1 text-xs text-[var(--ink-soft)]">
-                      预报 {row.forecastMaxTempC ?? "--"}C / 目标 {row.targetTempC ?? "--"}C
+                      预报 {row.forecastMaxTempC ?? "--"}{row?.unit === "fahrenheit" ? "°F" : "°C"} / 目标 {row.targetTempC ?? "--"}{row?.unit === "fahrenheit" ? "°F" : "°C"}
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -250,7 +129,7 @@ function SimulationTable({ rows }) {
                     <div className="mt-1 max-w-[320px] truncate text-xs text-[var(--ink-soft)]">{row.marketQuestion}</div>
                   </td>
                   <td className="px-4 py-3 font-semibold text-neutral-950">{formatPrice(row.buyNoPrice)}</td>
-                  <td className="px-4 py-3">{row.actualMaxTempC ?? "--"}C</td>
+                  <td className="px-4 py-3">{row.actualTempLabel || (row.actualMaxTempC != null && Number.isFinite(Number(row.actualMaxTempC)) ? `${Math.round(Number(row.actualMaxTempC))}${row?.unit === "fahrenheit" ? "°F" : "°C"}` : "--")}</td>
                   <td className={`px-4 py-3 font-semibold ${toneClass(row.accountingPnlUsd)}`}>
                     {row.status === "resolved" ? formatMoney(row.accountingPnlUsd) : "--"}
                   </td>
@@ -258,8 +137,8 @@ function SimulationTable({ rows }) {
               ))
             ) : (
               <tr>
-                <td className="px-4 py-8 text-center text-sm text-[var(--ink-soft)]" colSpan={7}>
-                  还没有 offset 候选记录。下一次天气抓取后会开始统计 -1 / 0 / +1。
+                <td className="px-4 py-8 text-center text-sm text-[var(--ink-soft)]" colSpan={isFollowYesterday ? 8 : 7}>
+                  还没有模拟记录。
                 </td>
               </tr>
             )}
@@ -270,103 +149,81 @@ function SimulationTable({ rows }) {
   );
 }
 
-export function WeatherSimulationPanel() {
-  const router = useRouter();
-  const [snapshot, setSnapshot] = useState(null);
-  const [loading, setLoading] = useState(true);
+export function WeatherSimulationSection({ simOrders, localDate }) {
+  const [expandedSim, setExpandedSim] = useState(null); // "a" | "b" | null
 
-  const loadData = useCallback(async () => {
-    try {
-      const res = await fetch("/api/weather");
-      if (!res.ok) throw new Error("fetch-failed");
-      const data = await res.json();
-      setSnapshot(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // 模式 A: 0度策略（来自 0:10 模拟下单）
+  const simA = simOrders?.zeroOffset || {};
+  const simARecords = simA.records || [];
+  const simASummary = aggregateRows(simARecords);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const handleToggleMode = useCallback(
-    async (offset, newMode) => {
-      if (!snapshot?.liveConfig) return;
-      const currentConfig = snapshot.liveConfig;
-      const offsetStrategies = { ...currentConfig.offsetStrategies };
-      const key = String(offset);
-      offsetStrategies[key] = {
-        ...(offsetStrategies[key] || {}),
-        offset,
-        mode: newMode,
-      };
-
-      try {
-        const res = await fetch("/api/weather", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ offsetStrategies }),
-        });
-        if (res.ok) {
-          const fresh = await fetch("/api/weather").then((r) => r.json());
-          setSnapshot(fresh);
-          router.refresh();
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    },
-    [snapshot, router],
-  );
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 text-sm text-[var(--ink-soft)]">
-        策略收益数据加载中…
-      </div>
-    );
-  }
-
-  const simulation = snapshot?.offsetSimulation || snapshot?.thresholdSim || {};
-  const selectedOffsets = new Set(simulation.selectedOffsets || [0]);
-  const selectedRows = (simulation.records || []).filter((row) =>
-    selectedOffsets.has(Number(row.temperatureOffsetC)),
-  );
-  const selectedSummary = aggregateRows(selectedRows);
-  const todayRows = selectedRows.filter((row) => row.date === snapshot?.localDate);
-  const cityRows = aggregateCityRows(simulation.records || []);
+  // 模式 B: 跟昨天偏移策略（来自 0:10 模拟下单）
+  const simB = simOrders?.followYesterday || {};
+  const simBRecords = simB.records || [];
+  const simBSummary = aggregateRows(simBRecords);
 
   return (
     <div className="space-y-4">
-      <section className="rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.86),rgba(255,246,224,0.72))] p-4 shadow-[var(--shadow)]">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="font-display text-xs uppercase tracking-[0.36em] text-[var(--ink-soft)]">Weather Offset Simulation</p>
-            <h2 className="mt-2 text-2xl font-semibold text-neutral-950">天气 -1 / 0 / +1 策略收益</h2>
-            <p className="mt-1 text-sm text-[var(--ink-soft)]">
-              每个温度偏移独立统计，实战递进也按城市和 offset 分开计算。
-            </p>
-          </div>
-          <div className="text-xs text-[var(--ink-soft)]">
-            单笔 {formatMoney(simulation.stakeUsd || 1)}
-          </div>
+      <section className="rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.86),rgba(246,236,216,0.72))] p-4 shadow-[var(--shadow)]">
+        <div className="flex flex-col gap-2">
+          <p className="font-display text-xs uppercase tracking-[0.36em] text-[var(--ink-soft)]">Simulation</p>
+          <h2 className="text-2xl font-semibold text-neutral-950">模拟策略收益对比</h2>
+          <p className="text-sm text-[var(--ink-soft)]">每日 0:10 自动下单模拟，单笔 $1，观察哪个模式更优</p>
         </div>
       </section>
 
-      <StrategyCards rows={simulation.strategyRows || []} onToggleMode={handleToggleMode} />
+      {/* 两个模式并排 */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* 模式 A */}
+        <section className="rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow)]">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-display text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">Strategy A</p>
+              <h3 className="mt-1 text-xl font-semibold text-neutral-950">0 度策略</h3>
+            </div>
+            <button
+              onClick={() => setExpandedSim(expandedSim === "a" ? null : "a")}
+              className="rounded-full border border-[var(--line)] px-4 py-2 text-xs font-semibold text-neutral-800 transition hover:border-[var(--accent-strong)] hover:text-[var(--accent-strong)]"
+            >
+              {expandedSim === "a" ? "收起" : "展开明细"}
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <SimMetricCard label="收益" value={formatMoney(simASummary.netPnlUsd)} helper={`${simASummary.settledRecords} 已结算`} toneValue={simASummary.netPnlUsd} />
+            <SimMetricCard label="ROI" value={formatPercent(simASummary.roi)} helper={`赢 ${simASummary.wins} / 输 ${simASummary.losses}`} toneValue={simASummary.roi} />
+          </div>
+          <p className="mt-3 text-xs text-[var(--ink-soft)]">买入预报温度对应的 NO 合约，{simARecords.length} 条记录</p>
+        </section>
 
-      <section className="grid gap-3 md:grid-cols-4">
-        <MetricCard label="已选组合收益" value={formatMoney(selectedSummary.netPnlUsd)} helper={`${selectedSummary.settledRecords} 已结算`} toneValue={selectedSummary.netPnlUsd} />
-        <MetricCard label="已选组合 ROI" value={formatPercent(selectedSummary.roi)} helper={`${selectedSummary.records} 单累计`} toneValue={selectedSummary.roi} />
-        <MetricCard label="今日已选候选" value={`${todayRows.length}`} helper={snapshot?.localDate || "--"} toneValue={0} />
-        <MetricCard label="全部 offset 收益" value={formatMoney(simulation.summary?.overall?.netPnlUsd)} helper={`${simulation.summary?.overall?.records || 0} 单累计`} toneValue={simulation.summary?.overall?.netPnlUsd} />
-      </section>
+        {/* 模式 B */}
+        <section className="rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-4 shadow-[var(--shadow)]">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-display text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">Strategy B</p>
+              <h3 className="mt-1 text-xl font-semibold text-neutral-950">跟昨天偏移</h3>
+            </div>
+            <button
+              onClick={() => setExpandedSim(expandedSim === "b" ? null : "b")}
+              className="rounded-full border border-[var(--line)] px-4 py-2 text-xs font-semibold text-neutral-800 transition hover:border-[var(--accent-strong)] hover:text-[var(--accent-strong)]"
+            >
+              {expandedSim === "b" ? "收起" : "展开明细"}
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <SimMetricCard label="收益" value={formatMoney(simBSummary.netPnlUsd)} helper={`${simBSummary.settledRecords} 已结算`} toneValue={simBSummary.netPnlUsd} />
+            <SimMetricCard label="ROI" value={formatPercent(simBSummary.roi)} helper={`赢 ${simBSummary.wins} / 输 ${simBSummary.losses}`} toneValue={simBSummary.roi} />
+          </div>
+          <p className="mt-3 text-xs text-[var(--ink-soft)]">昨天偏移+2则今天买+2，{simBRecords.length} 条记录</p>
+        </section>
+      </div>
 
-      <CityRanking rows={cityRows} />
-      <SimulationTable rows={simulation.records || []} />
+      {/* 展开的明细表 */}
+      {expandedSim === "a" && (
+        <SimulationTable title="0 度策略明细" rows={simARecords} isFollowYesterday={false} />
+      )}
+      {expandedSim === "b" && (
+        <SimulationTable title="跟昨天偏移策略明细" rows={simBRecords} isFollowYesterday={true} />
+      )}
     </div>
   );
 }

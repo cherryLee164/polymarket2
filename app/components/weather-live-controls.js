@@ -251,19 +251,25 @@ export function WeatherLiveControls({
             <form className="mt-5 space-y-5" onSubmit={handleSubmit}>
               <div>
                 <span className="text-sm text-[var(--ink-soft)]">运行模式</span>
-                <div className="mt-3 flex items-center gap-3">
-                  <span className={`text-sm font-semibold transition ${modeValue === "simulation" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>模拟</span>
-                  <button
-                    type="button"
-                    onClick={() => setModeValue(modeValue === "live" ? "simulation" : "live")}
-                    className={`relative h-7 w-12 rounded-full transition ${modeValue === "live" ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
-                    aria-label={modeValue === "live" ? "切换到模拟模式" : "切换到实盘模式"}
-                  >
-                    <span
-                      className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${modeValue === "live" ? "translate-x-5" : "translate-x-0.5"}`}
-                    />
-                  </button>
-                  <span className={`text-sm font-semibold transition ${modeValue === "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>实战</span>
+                <div className="mt-3 flex items-center gap-1">
+                  {["simulation", "live"].map((mode) => {
+                    const active = modeValue === mode;
+                    const label = mode === "live" ? "实战" : "模拟";
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setModeValue(mode)}
+                        className={`rounded-full px-3 py-1 text-sm font-semibold transition ${
+                          active
+                            ? "bg-[var(--accent-strong)] text-white shadow-sm"
+                            : "bg-white/60 text-[var(--ink-soft)] border border-[var(--line)]"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -297,16 +303,25 @@ export function WeatherLiveControls({
                           >
                             {active ? "启用" : "停用"}
                           </button>
-                          <div className="flex items-center gap-1.5">
-                            <span className={`text-xs font-semibold ${strategy?.mode !== "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>模拟</span>
-                            <button
-                              type="button"
-                              onClick={() => updateStrategy(option.key, { mode: strategy?.mode === "live" ? "simulation" : "live" })}
-                              className={`relative h-5 w-9 rounded-full transition ${strategy?.mode === "live" ? "bg-[var(--accent-strong)]" : "bg-gray-300"}`}
-                            >
-                              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${strategy?.mode === "live" ? "translate-x-4" : "translate-x-0.5"}`} />
-                            </button>
-                            <span className={`text-xs font-semibold ${strategy?.mode === "live" ? "text-neutral-950" : "text-[var(--ink-soft)]"}`}>实盘</span>
+                          <div className="flex items-center gap-1">
+                            {["simulation", "live"].map((mode) => {
+                              const mActive = strategy?.mode === mode;
+                              const mLabel = mode === "live" ? "实盘" : "模拟";
+                              return (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => updateStrategy(option.key, { mode })}
+                                  className={`rounded-full px-2 py-0.5 text-xs font-semibold transition ${
+                                    mActive
+                                      ? "bg-[var(--accent-strong)] text-white shadow-sm"
+                                      : "bg-white/60 text-[var(--ink-soft)] border border-[var(--line)]"
+                                  }`}
+                                >
+                                  {mLabel}
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>

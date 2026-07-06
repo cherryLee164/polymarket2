@@ -4,7 +4,6 @@ import { MonitorAutoRefresh } from "@/app/components/monitor-auto-refresh";
 import { MonitorSectionPanel } from "@/app/components/monitor-section";
 import { WeatherReviewPanel } from "@/app/components/weather-review-section";
 import { WeatherSectionPanel } from "@/app/components/weather-section";
-import { WeatherSimulationPanel } from "@/app/components/weather-simulation-section";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -31,30 +30,23 @@ function buildHomeHref(currentQuery, patch) {
 }
 
 function WeatherTabs({ currentQuery }) {
-  const activeTab = ["review", "simulation"].includes(currentQuery.weatherTab)
-    ? currentQuery.weatherTab
-    : "live";
+  const activeTab = currentQuery.weatherTab === "review" ? "review" : "live";
   const tabs = [
     {
       id: "live",
       label: "实盘明细",
-      helper: "收益、服务状态和今日下单明细",
+      helper: "收益、服务状态、今日下单明细和模拟策略",
     },
     {
       id: "review",
-      label: "复盘数据",
-      helper: "昨日亏损、温差和正偏差排行",
-    },
-    {
-      id: "simulation",
-      label: "策略收益",
-      helper: "-1 / 0 / +1 温度偏移模拟收益",
+      label: "城市温差",
+      helper: "国内外城市温差对比、昨日亏损名单",
     },
   ];
 
   return (
     <section className="rounded-[1.6rem] border border-[var(--line)] bg-[rgba(255,255,255,0.58)] p-2 shadow-[var(--shadow)]">
-      <div className="grid gap-2 md:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-2">
         {tabs.map((tab) => {
           const active = activeTab === tab.id;
           return (
@@ -106,9 +98,7 @@ export default async function Home({ searchParams }) {
   };
 
   const isWeatherSurface = currentQuery.surface === "weather";
-  const weatherTab = ["review", "simulation"].includes(currentQuery.weatherTab)
-    ? currentQuery.weatherTab
-    : "live";
+  const weatherTab = currentQuery.weatherTab === "review" ? "review" : "live";
   const monitorSnapshot = isWeatherSurface
     ? null
     : getMonitorSnapshot({
@@ -177,7 +167,6 @@ export default async function Home({ searchParams }) {
           <>
             <WeatherTabs currentQuery={currentQuery} />
             {weatherTab === "review" ? <WeatherReviewPanel /> : null}
-            {weatherTab === "simulation" ? <WeatherSimulationPanel /> : null}
             {weatherTab === "live" ? <WeatherSectionPanel /> : null}
           </>
         ) : (

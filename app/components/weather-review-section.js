@@ -89,7 +89,7 @@ function WeatherReviewFallback() {
     <div className="space-y-6">
       <section className="rounded-[1.8rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5 shadow-[var(--shadow)]">
         <p className="font-display text-xs uppercase tracking-[0.38em] text-[var(--ink-soft)]">Weather Review</p>
-        <h3 className="mt-3 text-xl font-semibold text-neutral-950">天气复盘数据加载中</h3>
+        <h3 className="mt-3 text-xl font-semibold text-neutral-950">城市温差数据加载中</h3>
         <p className="mt-2 text-sm text-[var(--ink-soft)]">正在读取本地快照，避免实时写入数据造成页面首屏不一致。</p>
       </section>
     </div>
@@ -113,7 +113,7 @@ export async function WeatherReviewPanel() {
     review,
   });
   const lossCityNames = yesterdayLossCities.rows
-    .map((row) => row.cityZh || row.cityEn || row.citySlug)
+    .map((row) => row.cityZh || row.citySlug)
     .join("、");
   const lossHelper = yesterdayLossCities.rows.length
     ? `${formatDate(yesterdayLossCities.date)} · ${lossCityNames}`

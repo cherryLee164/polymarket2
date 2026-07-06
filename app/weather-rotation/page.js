@@ -173,7 +173,7 @@ function RecordTable({ records }) {
                   <td className="px-5 py-4">{formatDate(row.date)}</td>
                   <td className="px-5 py-4">{row.legLabel}</td>
                   <td className="px-5 py-4">
-                    <div className="font-semibold text-neutral-950">{row.cityZh || row.cityEn}</div>
+                    <div className="font-semibold text-neutral-950">{row.cityZh}</div>
                     <div className="mt-1 text-xs text-[var(--ink-soft)]">{row.station}</div>
                   </td>
                   <td className="px-5 py-4 font-semibold">{formatTemp(row.forecastMax, row.unit)}</td>
