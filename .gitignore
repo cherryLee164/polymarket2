@@ -50,3 +50,12 @@ __pycache__/
 # tmp scripts
 tmp_*.js
 x.date
+
+# IDE
+.trae/
+
+# sensitive data
+*.xlsx
+
+# temp
+/temp/
