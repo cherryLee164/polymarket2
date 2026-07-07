@@ -12,10 +12,12 @@ const WEATHER_LIVE_ORDER_SCRIPT = path.join(ROOT_DIR, "scripts", "weather_live_o
 const WEATHER_LIVE_RECONCILE_SCRIPT = path.join(ROOT_DIR, "scripts", "weather_reconcile_live_orders.py");
 const LIVE_ORDERS_PATH = path.join(ROOT_DIR, "data", "weather_predictions", "live-orders.json");
 const SIM_ORDERS_PATH = path.join(ROOT_DIR, "data", "weather_predictions", "sim-orders.json");
+const LOCKS_DIR = path.join(ROOT_DIR, "data", "locks");
+const LOCK_PATH = path.join(LOCKS_DIR, "weather-live-order.lock.json");
 
 // 循环间隔：默认 5 分钟（与原 sync 周期一致）
 const LOOP_INTERVAL_MS = Number(process.env.WEATHER_LIVE_LOOP_INTERVAL_MS || 5 * 60 * 1000);
-// 单次 weather_live_order.py 子进程超时：下单前 10 分钟 + 下单后 10 分钟 + 缓冲 = 25 分钟
+// 单次 weather_live_order.py 子进程超时：首次约 60s+10min，重试约 10min+10min，留缓冲共 25 分钟
 const LIVE_ORDER_TIMEOUT_MS = Number(process.env.WEATHER_LIVE_ORDER_TIMEOUT_MS || 25 * 60 * 1000);
 const RECONCILE_TIMEOUT_MS = Number(process.env.WEATHER_LIVE_RECONCILE_TIMEOUT_MS || 2 * 60 * 1000);
 // 实盘下单截止时间：北京时间 12:00 后不再下当天真实单
@@ -32,7 +34,6 @@ const RETRY_FAILED_ORDERS = envEnabled("WEATHER_LIVE_RETRY_FAILED_ORDERS", true)
 // 可重试的临时性错误标记（与 weather_live_order.py 的 RETRYABLE_FAILED_ERROR_MARKERS 保持一致）
 const RETRYABLE_FAILED_ERROR_MARKERS = [
   "order_version_mismatch",
-  "collateral balance",
   "request exception",
   "500 server error",
   "internal server error",
@@ -44,11 +45,17 @@ const RETRYABLE_FAILED_ERROR_MARKERS = [
 ];
 // 保底退出时间：北京时间 14:00 后强制退出，避免卡死
 const LIVE_LOOP_DEADLINE_MINUTES = Number(process.env.WEATHER_LIVE_LOOP_DEADLINE_MINUTES || 14 * 60);
+// 锁文件超时时间：超过此时间认为进程已死，自动失效（10 分钟）
+const LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 
 function envEnabled(name, fallback = true) {
   const raw = process.env[name];
   if (raw == null || `${raw}`.trim() === "") return fallback;
   return ["1", "true", "yes", "on"].includes(`${raw}`.trim().toLowerCase());
+}
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
 }
 
 function log(message) {
@@ -62,6 +69,53 @@ function readJson(filePath) {
   } catch {
     return null;
   }
+}
+
+function writeJson(filePath, payload) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+function pidAlive(pid) {
+  if (!pid || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock() {
+  const existing = readJson(LOCK_PATH);
+  if (existing) {
+    const pid = Number(existing.pid || 0);
+    const startedAt = existing.startedAt ? new Date(existing.startedAt).getTime() : 0;
+    const ageMs = Date.now() - startedAt;
+    const alive = pidAlive(pid);
+    if (alive && ageMs < LOCK_TIMEOUT_MS) {
+      log(`already running pid=${pid}, exiting`);
+      process.exit(0);
+    }
+    if (!alive) {
+      log(`dead lock detected (pid=${pid} not alive), removing`);
+    } else if (ageMs >= LOCK_TIMEOUT_MS) {
+      log(`stale lock detected (age=${Math.round(ageMs / 1000)}s), removing`);
+    }
+    try {
+      fs.rmSync(LOCK_PATH, { force: true });
+    } catch {}
+  }
+  writeJson(LOCK_PATH, { pid: process.pid, startedAt: new Date().toISOString() });
+}
+
+function releaseLock() {
+  try {
+    const current = readJson(LOCK_PATH);
+    if (current && Number(current.pid || 0) === process.pid) {
+      fs.rmSync(LOCK_PATH, { force: true });
+    }
+  } catch {}
 }
 
 function getBeijingDate() {
@@ -216,12 +270,18 @@ function runLiveOrderOnce(localDate) {
   logChildOutput("live-order stderr", result.stderr);
   if (result.error) {
     log(`live order failed: ${result.error.message || result.error}`);
-    return false;
+    // 子进程被超时 kill 或 spawn 失败视为临时错误
+    return { ok: false, exitCode: null, transient: true };
   }
-  if (result.status !== 0) {
-    log(`live order exited status=${result.status}`);
+  log(`live order exited status=${result.status}`);
+  // status 0: 成功或全部跳过；1: 一般错误；2: 有临时错误，可重试；3: 永久错误，应退出
+  if (result.status === 3) {
+    return { ok: false, exitCode: 3, permanent: true };
   }
-  return true;
+  if (result.status === 2) {
+    return { ok: false, exitCode: 2, transient: true };
+  }
+  return { ok: result.status === 0, exitCode: result.status };
 }
 
 function runReconcileOnce() {
@@ -243,6 +303,17 @@ function runReconcileOnce() {
 }
 
 async function main() {
+  acquireLock();
+  process.on("exit", releaseLock);
+  process.on("SIGINT", () => {
+    releaseLock();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    releaseLock();
+    process.exit(0);
+  });
+
   const localDate = getBeijingDate();
   log(
     `live order loop started date=${localDate} ` +
@@ -250,6 +321,9 @@ async function main() {
       `deadline=${LIVE_ORDER_DEADLINE_HOUR}:00 ` +
       `interval=${LOOP_INTERVAL_MS}ms`,
   );
+
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 5;
 
   while (true) {
     const beijingMinutes = getBeijingMinutes();
@@ -283,7 +357,26 @@ async function main() {
         process.exit(0);
       }
       // 跑一次下单
-      runLiveOrderOnce(localDate);
+      const orderResult = runLiveOrderOnce(localDate);
+      // 永久错误：直接退出，避免无意义重试
+      if (orderResult.permanent) {
+        log(`permanent error detected, exiting`);
+        runReconcileOnce();
+        process.exit(1);
+      }
+      if (orderResult.transient || !orderResult.ok) {
+        consecutiveFailures += 1;
+        log(
+          `live order transient/general failure consecutive=${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
+        );
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          log(`too many consecutive failures, exiting`);
+          runReconcileOnce();
+          process.exit(1);
+        }
+      } else {
+        consecutiveFailures = 0;
+      }
       // 跑一次 reconcile
       runReconcileOnce();
     }

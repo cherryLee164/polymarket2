@@ -30,18 +30,13 @@ def env_float(name: str, default: float) -> float:
 
 CAPTURE_SLOT_ID = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_ID", "00")
 CAPTURE_SLOT_LABEL = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_LABEL", "00:10")
-MAX_PRICE_CAP = env_float("WEATHER_LIVE_MAX_PRICE_CAP", 0.95)
 # 实盘测试：No 价格超过 90 美分不买入
 MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.90)
 HIGH_PRICE_SKIP_REASON = f"no-price-above-{MAX_NO_PRICE:.2f}"
-USE_MAX_PRICE_CAP = str(os.getenv("WEATHER_LIVE_USE_MAX_PRICE_CAP", "true")).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 # 下单后等待 10 分钟再检测订单是否成功，避免 API 报错但订单已成交导致重复下单
-POSITION_CONFIRM_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_CONFIRM_WAIT_SECONDS", "600"))
+POST_ORDER_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_POST_ORDER_WAIT_SECONDS", "600"))
+# 下单前等待：若该 candidate 此前有未确认/未成交记录则等待 10 分钟让链上状态沉淀，否则只等 60 秒
+PRE_ORDER_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_PRE_ORDER_WAIT_SECONDS", "60"))
 # 实盘下单截止时间：北京时间 12:00 后不再下当天真实单
 LIVE_ORDER_DEADLINE_HOUR = int(os.getenv("WEATHER_LIVE_DEADLINE_HOUR", "12"))
 # 虚拟测试账户：初始资金 10 美元，亏完不再下单（程序不结束）
@@ -50,6 +45,8 @@ VIRTUAL_ACCOUNT_INITIAL_USD = float(os.getenv("WEATHER_LIVE_VIRTUAL_INITIAL_USD"
 LIVE_ORDER_CITY_SLUGS = set(
     str(os.getenv("WEATHER_LIVE_CITY_SLUGS", "beijing")).split(",")
 )
+# Polymarket 最小下单金额阈值，剩余金额低于此值视为已填满，避免下 0.0001 这类无效订单
+MIN_ORDER_STAKE_USD = float(os.getenv("WEATHER_LIVE_MIN_ORDER_STAKE_USD", "0.01"))
 MAX_ORDER_ATTEMPTS = max(1, int(os.getenv("WEATHER_LIVE_MAX_ORDER_ATTEMPTS", "288")))
 ORDER_RETRY_AFTER_SECONDS = float(os.getenv("WEATHER_LIVE_RETRY_AFTER_SECONDS", "300"))
 ORDER_RETRY_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_ORDER_RETRY_WAIT_SECONDS", "3"))
@@ -62,7 +59,6 @@ RETRY_FAILED_ORDERS = str(os.getenv("WEATHER_LIVE_RETRY_FAILED_ORDERS", "true"))
 }
 RETRYABLE_FAILED_ERROR_MARKERS = (
     "order_version_mismatch",
-    "collateral balance",
     "request exception",
     "500 server error",
     "internal server error",
@@ -299,62 +295,6 @@ def build_candidates_from_sim_orders(sim_orders: List[Dict[str, Any]], target_da
         source["key"] = order_key(source)
         candidates.append(source)
     return candidates
-
-
-def expand_weather_candidates(records: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
-    enabled_offsets = set(LIVE_STRATEGY_CONFIG["temperatureOffsets"])
-    expanded: List[Dict[str, Any]] = []
-    for item in records:
-        if (
-            item.get("date") != target_date
-            or item.get("captureSlotId") != CAPTURE_SLOT_ID
-            or not item.get("eventSlug")
-            or str(item.get("status") or "").lower() == "resolved"
-        ):
-            continue
-        candidate_markets = item.get("candidateMarkets")
-        if isinstance(candidate_markets, list) and candidate_markets:
-            # 只选与原始预测温度 targetTempC 匹配的主市场，和 sim-orders 保持一致
-            target_temp = as_float(item.get("targetTempC"))
-            for candidate in candidate_markets:
-                if not isinstance(candidate, dict):
-                    continue
-                cand_temp = as_float(candidate.get("targetTempC"))
-                if not math.isfinite(target_temp) or cand_temp != target_temp:
-                    continue
-                offset = normalize_offset(candidate.get("temperatureOffsetC"))
-                if offset not in enabled_offsets:
-                    continue
-                no_price = as_float(candidate.get("buyNoPrice"))
-                if not candidate.get("marketSlug") or no_price <= 0 or no_price >= 1 or no_price > MAX_NO_PRICE:
-                    continue
-                source = dict(item)
-                source.update(
-                    {
-                        "temperatureOffsetC": offset,
-                        "targetTempC": candidate.get("targetTempC", item.get("targetTempC")),
-                        "marketSlug": candidate.get("marketSlug"),
-                        "marketTitle": candidate.get("marketTitle"),
-                        "marketQuestion": candidate.get("marketQuestion"),
-                        "marketSelectionMode": candidate.get("marketSelectionMode"),
-                        "marketBucketKind": candidate.get("marketBucketKind"),
-                        "marketBucketValue": candidate.get("marketBucketValue"),
-                        "buyNoPrice": candidate.get("buyNoPrice"),
-                        "sharesBought": candidate.get("sharesBought"),
-                        "marketClosed": candidate.get("marketClosed"),
-                    }
-                )
-                source["key"] = order_key(source)
-                expanded.append(source)
-            continue
-
-        offset = normalize_offset(item.get("temperatureOffsetC"))
-        if offset in enabled_offsets and item.get("marketSlug") and as_float(item.get("buyNoPrice")) <= MAX_NO_PRICE:
-            source = dict(item)
-            source["temperatureOffsetC"] = offset
-            source["key"] = order_key(source)
-            expanded.append(source)
-    return expanded
 
 
 def is_active_order(record: Dict[str, Any]) -> bool:
@@ -661,7 +601,25 @@ def compute_city_stake(
     target_date: str,
     temperature_offset: int = 0,
     stake_plan: Optional[Dict[str, Any]] = None,
+    source: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    # 直接复用 sim-order 的 stakeUsd，保证 live 与 sim 金额完全一致
+    if source and math.isfinite(float(source.get("stakeUsd") or 0)):
+        stake_usd = float(source["stakeUsd"])
+        return {
+            "stakeUsd": round_money(stake_usd, 6),
+            "stepIndex": 0,
+            "lossStreakBefore": 0,
+            "cyclePnlBefore": 0.0,
+            "configuredBaseStakeUsd": stake_usd,
+            "effectiveBaseStakeUsd": stake_usd,
+            "configuredStakeSequenceLabel": str(stake_usd),
+            "effectiveStakeSequenceLabel": str(stake_usd),
+            "plannedStakeTotalUsd": stake_usd,
+            "availableBalanceUsd": (stake_plan or {}).get("balanceUsd"),
+            "stakeDowngradedByBalance": False,
+            "stakeDowngradeReason": None,
+        }
     progression = compute_city_progression(city_slug, live_orders, target_date, temperature_offset)
     offset_settings = get_offset_stake_settings(temperature_offset)
     planned_sequences = (stake_plan or {}).get("sequencesByOffset") or {}
@@ -811,7 +769,8 @@ def build_live_record(
         "forecastMinTempC": source.get("forecastMinTempC"),
         "forecastMaxTempC": source.get("forecastMaxTempC"),
         "targetTempC": source.get("targetTempC"),
-        "temperatureOffsetC": normalize_offset(source.get("temperatureOffsetC")),
+        "temperatureOffsetC": source.get("temperatureOffsetC"),
+        "prevDateDeltaC": source.get("prevDateDeltaC"),
         "dayWeather": source.get("dayWeather"),
         "nightWeather": source.get("nightWeather"),
         "eventSlug": source.get("eventSlug"),
@@ -932,6 +891,112 @@ def build_high_price_skip_record(
     return record
 
 
+def normalize_existing_failed_records(
+    live_orders: List[Dict[str, Any]], target_date: str, trader
+) -> set:
+    """归一化当天已存在的 failed 记录，避免旧 bug/临时错误阻塞当天流程。
+    返回被归一化的记录 key 集合，用于后续 exit 3 判定时排除。"""
+    normalized_keys: set = set()
+    account_positions: Optional[Dict[str, Dict[str, float]]] = None
+    for record in live_orders:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("date")) != target_date:
+            continue
+        key = record.get("key")
+        if not key:
+            continue
+        status = str(record.get("status") or "").lower()
+        if status != "failed":
+            continue
+        error_text = str(record.get("error") or "").lower()
+        requested = as_float(record.get("requestedStakeUsd"))
+        stake = as_float(record.get("stakeUsd"))
+        is_small_failed = (
+            "invalid maker amount" in error_text
+            or (requested > 0 and requested < MIN_ORDER_STAKE_USD)
+            or (stake > 0 and stake < MIN_ORDER_STAKE_USD)
+        )
+        is_temporary_failed = is_temporary_error(error_text)
+        if not is_small_failed and not is_temporary_failed:
+            continue
+        try:
+            if account_positions is None:
+                account_positions = fetch_account_positions(trader)
+            token_id = str(record.get("tokenId") or "")
+            actual_filled = compute_actual_filled_stake(record, account_positions, token_id)
+            city = record.get("cityZh") or record.get("citySlug") or key
+            if actual_filled >= MIN_ORDER_STAKE_USD:
+                record.update(
+                    {
+                        "status": "pending",
+                        "result": "pending",
+                        "error": None,
+                        "failedAt": None,
+                        "fillStatus": "position-detected",
+                        "actualBuyCostUsd": actual_filled,
+                        "stakeUsd": actual_filled,
+                        "spentUsd": actual_filled,
+                    }
+                )
+                normalized_keys.add(key)
+                print(
+                    f"NORMALIZE filled-to-pending {city} "
+                    f"filled=${actual_filled:.3f}"
+                )
+            elif is_small_failed:
+                record.update(
+                    {
+                        "status": "skipped",
+                        "result": "skipped",
+                        "error": None,
+                        "failedAt": None,
+                        "fillStatus": "skipped-small-amount",
+                        "stakeUsd": 0,
+                        "spentUsd": 0,
+                        "sharesBought": 0,
+                    }
+                )
+                normalized_keys.add(key)
+                print(
+                    f"NORMALIZE small-failed-to-skipped {city} "
+                    f"requested=${requested:.6f}"
+                )
+            elif is_temporary_failed:
+                record.update(
+                    {
+                        "status": "pending",
+                        "result": "pending",
+                        "error": None,
+                        "failedAt": None,
+                        "fillStatus": "pending-retry",
+                    }
+                )
+                normalized_keys.add(key)
+                print(f"NORMALIZE temporary-failed-to-pending {city}")
+        except Exception as exc:
+            print(f"WARN normalize failed for {key}: {exc}")
+    return normalized_keys
+
+
+def is_authentication_temporary_error(error_text: str) -> bool:
+    """认证阶段异常是否为临时网络错误（应重试）而非永久配置错误。"""
+    text = error_text.lower()
+    temporary_markers = (
+        "timeout",
+        "connection",
+        "handshake",
+        "ssl",
+        "temporary",
+        "503",
+        "500 server error",
+        "service unavailable",
+        "too many requests",
+        "rate limit",
+    )
+    return any(marker in text for marker in temporary_markers)
+
+
 def main() -> int:
     target_date = today_ymd()
     # 实盘下单截止时间检查：北京时间 12:00 后不再下当天真实单
@@ -982,6 +1047,11 @@ def main() -> int:
 
     trader = order_engine.create_trader()
     trader.initialize()
+    # 归一化当天已存在的 failed 记录：旧 bug 导致的小额失败或临时网络失败，
+    # 若账户实际已有持仓则改为 pending，否则改为 skipped，避免阻塞当天流程。
+    pre_existing_failed_keys = normalize_existing_failed_records(live_orders, target_date, trader)
+    if pre_existing_failed_keys:
+        write_json(LIVE_ORDERS_PATH, live_orders)
     balance_status = trader.get_balance_status()
     balance_usd = float(balance_status.get("balance") or 0.0)
     stake_plan = build_balance_aware_stake_plan(candidates, live_orders, existing_by_key, target_date, balance_usd)
@@ -1021,6 +1091,9 @@ def main() -> int:
             results.append({"city": city, "status": "skipped-existing"})
             continue
 
+        # 每个 candidate 处理前重新计算虚拟账户余额，反映前一笔下单后的最新状态
+        virtual_account = compute_virtual_account_balance(live_orders)
+
         live_record = None
         try:
             stake = compute_city_stake(
@@ -1029,6 +1102,7 @@ def main() -> int:
                 target_date,
                 normalize_offset(source.get("temperatureOffsetC")),
                 stake_plan,
+                source=source,
             )
             # 先获取市场和 token，用于查账户实际持仓
             event = order_engine.fetch_event(str(source.get("eventSlug")))
@@ -1039,8 +1113,10 @@ def main() -> int:
             current_no_price = token["currentNoPrice"] or round_money(source.get("buyNoPrice"), 6)
             if not current_no_price or current_no_price <= 0:
                 raise RuntimeError("missing No price")
-            # 下单前等待2分钟，让之前的订单有时间成交并记录，避免重复下单
-            time.sleep(POSITION_CONFIRM_WAIT_SECONDS)
+            # 若此前有未确认/未成交记录，等待链上状态沉淀；首次尝试只需短暂等待
+            pre_wait = POST_ORDER_WAIT_SECONDS if existing_record and not has_confirmed_fill(existing_record) else PRE_ORDER_WAIT_SECONDS
+            print(f"WAIT before-order {city} seconds={pre_wait:.0f} reason={'unconfirmed-existing' if existing_record and not has_confirmed_fill(existing_record) else 'first-attempt'}")
+            time.sleep(pre_wait)
             # 查 Polymarket 账户实际持仓，判断是否已下单
             account_positions = fetch_account_positions(trader)
             actual_filled = compute_actual_filled_stake(source, account_positions, str(token["tokenId"]))
@@ -1054,10 +1130,11 @@ def main() -> int:
                 f"actual_filled=${actual_filled:.3f} target=${configured_stake:.3f} "
                 f"remaining=${remaining_stake:.3f}"
             )
-            if remaining_stake <= 0:
+            if remaining_stake <= 0 or remaining_stake < MIN_ORDER_STAKE_USD:
                 print(
                     f"SKIP already-filled {city} "
-                    f"actual_filled=${actual_filled:.3f} target=${configured_stake:.3f}"
+                    f"actual_filled=${actual_filled:.3f} target=${configured_stake:.3f} "
+                    f"remaining=${remaining_stake:.6f} min=${MIN_ORDER_STAKE_USD:.3f}"
                 )
                 results.append({"city": city, "status": "skipped-already-filled"})
                 continue
@@ -1072,10 +1149,8 @@ def main() -> int:
                 )
                 results.append({"city": city, "status": "skipped-virtual-empty"})
                 continue
-            if USE_MAX_PRICE_CAP:
-                price_cap = MAX_PRICE_CAP
-            else:
-                price_cap = min(MAX_PRICE_CAP, max(float(current_no_price), float(source.get("buyNoPrice") or 0)))
+            # 价格上限统一用 MAX_NO_PRICE，确保成交价不会超过 0.90
+            price_cap = MAX_NO_PRICE
             if price_cap <= 0:
                 raise RuntimeError("invalid price cap")
             if float(current_no_price) > MAX_NO_PRICE:
@@ -1106,7 +1181,8 @@ def main() -> int:
                         "buyNoPrice": current_no_price or source.get("buyNoPrice"),
                         "recordedBuyNoPrice": source.get("buyNoPrice"),
                         "priceCap": price_cap,
-                        "temperatureOffsetC": normalize_offset(source.get("temperatureOffsetC")),
+                        "temperatureOffsetC": source.get("temperatureOffsetC"),
+                        "prevDateDeltaC": source.get("prevDateDeltaC"),
                         "targetTempC": source.get("targetTempC"),
                         "marketSelectionMode": source.get("marketSelectionMode"),
                         "marketBucketKind": source.get("marketBucketKind"),
@@ -1173,7 +1249,8 @@ def main() -> int:
             if order_id:
                 order_ids.append(order_id)
             submitted = bool(order_id) or bool(isinstance(response, dict) and response.get("success"))
-            time.sleep(max(0.0, POSITION_CONFIRM_WAIT_SECONDS))
+            print(f"WAIT after-order {city} seconds={POST_ORDER_WAIT_SECONDS:.0f}")
+            time.sleep(max(0.0, POST_ORDER_WAIT_SECONDS))
             after = float(trader.get_position_size(token["tokenId"]) or 0.0)
             delta = max(0.0, after - baseline)
             order_attempts.append(
@@ -1276,10 +1353,60 @@ def main() -> int:
 
     bought = sum(1 for item in results if item["status"] == "pending")
     failed = sum(1 for item in results if item["status"] == "failed")
-    skipped = sum(1 for item in results if item["status"] in {"skipped-existing", "skipped-price", "skipped-virtual-empty", "skipped-not-whitelisted"})
+    skipped = sum(1 for item in results if item["status"] in {"skipped-existing", "skipped-price", "skipped-virtual-empty", "skipped-already-filled", "skipped-virtual-empty"})
     print(f"SUMMARY date={target_date} bought={bought} failed={failed} skipped={skipped}")
-    return 0 if failed == 0 else 2
+    if failed == 0:
+        return 0
+    # 检查失败是否为临时性错误；临时错误返回 2（loop 可重试），永久错误返回 3（loop 应退出）
+    failed_errors = [
+        str(record.get("error") or "").lower()
+        for record in live_orders
+        if (
+            record.get("date") == target_date
+            and record.get("status") == "failed"
+            and record.get("key") not in pre_existing_failed_keys
+        )
+    ]
+    has_permanent = any(
+        marker in error_text
+        for error_text in failed_errors
+        for marker in [
+            "unable to authenticate",
+            "invalid maker amount",
+            "insufficient balance",
+            "not enough balance",
+            "collateral balance",
+            "missing private key",
+        ]
+    )
+    return 3 if has_permanent else 2
+
+
+def is_temporary_error(error_text: str) -> bool:
+    text = error_text.lower()
+    return any(marker in text for marker in RETRYABLE_FAILED_ERROR_MARKERS)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        error_text = str(exc)
+        print(f"FATAL {error_text}", file=sys.stderr)
+        # 初始化阶段异常：临时错误返回 2，永久错误返回 3
+        permanent_markers = [
+            "unable to authenticate",
+            "missing private key",
+            "invalid maker amount",
+            "insufficient balance",
+            "not enough balance",
+            "collateral balance",
+        ]
+        # 认证类异常若明显是网络/SSL/超时等临时问题，应让 loop 重试而非直接退出
+        if "unable to authenticate" in error_text.lower() and is_authentication_temporary_error(error_text):
+            raise SystemExit(2)
+        if any(marker in error_text.lower() for marker in permanent_markers):
+            raise SystemExit(3)
+        if is_temporary_error(error_text):
+            raise SystemExit(2)
+        raise SystemExit(1)

@@ -159,11 +159,39 @@ def fetch_order_trades(trader, record: Dict[str, Any]) -> List[Dict[str, Any]]:
         after=(after - PLACED_AT_TOLERANCE_SECONDS) if after else None,
         before=before,
     )
-    try:
-        trades = trader.client.get_trades(params)
-    except Exception:
-        return []
-    return trades if isinstance(trades, list) else []
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            trades = trader.client.get_trades(params)
+            return trades if isinstance(trades, list) else []
+        except Exception as exc:
+            last_error = exc
+            error_text = str(exc).lower()
+            is_transient = any(
+                marker in error_text
+                for marker in [
+                    "timeout",
+                    "connection",
+                    "handshake",
+                    "ssl",
+                    "temporary",
+                    "503",
+                    "500 server error",
+                    "service unavailable",
+                    "too many requests",
+                    "rate limit",
+                ]
+            )
+            if not is_transient or attempt >= 3:
+                break
+            wait_seconds = 2 ** attempt
+            print(
+                f"WARN get_trades transient error for {record.get('citySlug')} "
+                f"attempt={attempt}/3, retry in {wait_seconds}s: {exc}"
+            )
+            time.sleep(wait_seconds)
+    print(f"WARN get_trades failed for {record.get('citySlug')}: {last_error}")
+    return []
 
 
 def maker_orders(trade: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -357,6 +385,17 @@ def reconcile_record(record: Dict[str, Any], trader) -> Tuple[Dict[str, Any], bo
         "canceled",
     }:
         return record, False
+
+    # 已成交记录优先信任：不要因 API 临时失败或缺少 orderId 把真实成交单清零
+    actual_cost = as_float(record.get("actualBuyCostUsd"))
+    actual_shares = as_float(record.get("actualBuyShares"))
+    if actual_cost > EPSILON and actual_shares > EPSILON:
+        updated = {
+            **record,
+            "fillStatus": record.get("fillStatus") or "bot-order-fill",
+            "reconciledAt": datetime.now(timezone.utc).isoformat(),
+        }
+        return updated, updated != record
 
     if not response_order_ids(record):
         updated = {

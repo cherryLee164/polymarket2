@@ -27,6 +27,28 @@ from py_clob_client_v2.http_helpers import helpers as clob_http_helpers
 from py_clob_client_v2.order_builder.constants import BUY, SELL
 
 
+def configure_clob_http_transport():
+    """为 py_clob_client_v2 配置更宽松的 httpx client：代理、连接/读取超时、HTTP/2。"""
+    proxy_url = (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+    )
+    timeout = httpx.Timeout(
+        30.0, connect=20.0, read=30.0, write=30.0, pool=30.0
+    )
+    clob_http_helpers._http_client = httpx.Client(
+        http2=True,
+        timeout=timeout,
+        proxy=proxy_url,
+        trust_env=True,
+    )
+
+
+configure_clob_http_transport()
+
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -3092,11 +3114,51 @@ def create_trader():
     selected_signature_type = None
     selected_funder = None
     selected_balance = -1.0
+    last_error = None
+
+    def is_transient_auth_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(
+            marker in text
+            for marker in [
+                "timeout",
+                "connection",
+                "handshake",
+                "ssl",
+                "temporary",
+                "503",
+                "500 server error",
+                "service unavailable",
+                "too many requests",
+                "rate limit",
+            ]
+        )
 
     for signature_type in signature_candidates:
         funder = signer_address if signature_type == 0 else resolved_funder
+        candidate_client = None
+        snapshot = None
+        attempts = 0
+        max_attempts = 3
+        while attempts < max_attempts:
+            try:
+                candidate_client, snapshot = probe_client(signature_type, funder)
+                break
+            except Exception as exc:
+                attempts += 1
+                last_error = exc
+                if attempts >= max_attempts or not is_transient_auth_error(exc):
+                    log(f"Signature type {signature_type} probe failed: {exc}")
+                    break
+                wait_seconds = 2 ** attempts
+                log(
+                    f"Signature type {signature_type} probe transient error, "
+                    f"retrying in {wait_seconds}s: {exc}"
+                )
+                time.sleep(wait_seconds)
+        if candidate_client is None or snapshot is None:
+            continue
         try:
-            candidate_client, snapshot = probe_client(signature_type, funder)
             balance_usd = snapshot_balance_usd(snapshot)
             log(
                 f"Signature type {signature_type} probe ok: balance=${balance_usd:.6f} funder={funder}"
@@ -3108,10 +3170,12 @@ def create_trader():
                 selected_funder = funder
                 selected_balance = balance_usd
         except Exception as exc:
-            log(f"Signature type {signature_type} probe failed: {exc}")
+            last_error = exc
+            log(f"Signature type {signature_type} snapshot parse failed: {exc}")
 
     if selected_client is None:
-        raise RuntimeError("unable to authenticate with Polymarket Python client")
+        error_detail = f" ({last_error})" if last_error else ""
+        raise RuntimeError(f"unable to authenticate with Polymarket Python client{error_detail}")
 
     class LiveTrader:
         mode = "live"

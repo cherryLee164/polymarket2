@@ -1,7 +1,9 @@
 const { execFile } = require('child_process')
 const { promisify } = require('util')
 
-const CURL_TIMEOUT_SECONDS = Number(process.env.CURL_TIMEOUT_SECONDS || 20)
+const CURL_TIMEOUT_SECONDS = Number(process.env.CURL_TIMEOUT_SECONDS || 30)
+const CURL_CONNECT_TIMEOUT_SECONDS = Number(process.env.CURL_CONNECT_TIMEOUT_SECONDS || 10)
+const NODE_FETCH_TIMEOUT_MS = Number(process.env.NODE_FETCH_TIMEOUT_MS || 30000)
 const HAS_PROXY_ENV = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -65,6 +67,7 @@ async function fetchText(url, label = 'text') {
 async function fetchJsonWithNode(url, label) {
   const response = await fetch(url, {
     cache: 'no-store',
+    signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
     headers: {
       accept: 'application/json',
       'cache-control': 'no-cache, no-store',
@@ -81,6 +84,7 @@ async function fetchJsonWithNode(url, label) {
 async function fetchTextWithNode(url, label) {
   const response = await fetch(url, {
     cache: 'no-store',
+    signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
     headers: {
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'cache-control': 'no-cache, no-store',
@@ -108,6 +112,8 @@ async function fetchTextWithCurl(url, label, extraArgs = []) {
         '--show-error',
         '--fail',
         '--location',
+        '--connect-timeout',
+        String(CURL_CONNECT_TIMEOUT_SECONDS),
         '--max-time',
         String(CURL_TIMEOUT_SECONDS),
         '--header',
@@ -123,6 +129,8 @@ async function fetchTextWithCurl(url, label, extraArgs = []) {
         encoding: 'utf8',
         windowsHide: true,
         maxBuffer: 10 * 1024 * 1024,
+        timeout: CURL_TIMEOUT_SECONDS * 1000 + 5000,
+        killSignal: 'SIGKILL',
       },
     )
     return stdout
