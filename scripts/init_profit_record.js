@@ -28,6 +28,7 @@ async function main() {
     ws.getCell("A1").value = "日期";
     ws.getCell("B1").value = "金额";
     ws.getCell("C1").value = "收入";
+    ws.getCell("D1").value = "充值金额";
     ws.getRow(1).font = { bold: true };
     ws.getRow(1).alignment = { horizontal: "center" };
 
@@ -35,6 +36,7 @@ async function main() {
     ws.getColumn(1).width = 14;
     ws.getColumn(2).width = 12;
     ws.getColumn(3).width = 12;
+    ws.getColumn(4).width = 12;
 
     // 填入日期行
     let rowIdx = 2;
@@ -45,21 +47,22 @@ async function main() {
       dateCell.numFmt = "yyyy/m/d";
 
       // 金额列默认留空（后续填入）
-      // 收入列：用公式
+      // 充值金额列默认留空（用户手动填入）
+      // 收入列：用公式，扣除当天充值金额（D列为空时视为0）
       if (rowIdx === 2) {
         // 每月第一天
         if (prevMonthLastDayRef) {
-          // 跨月：收入 = 当天金额 - 上月最后一天金额
+          // 跨月：收入 = 当天金额 - 上月最后一天金额 - 当天充值
           ws.getCell(`C${rowIdx}`).value = {
-            formula: `B${rowIdx}-${prevMonthLastDayRef.sheetName}!B${prevMonthLastDayRef.row}`,
+            formula: `B${rowIdx}-${prevMonthLastDayRef.sheetName}!B${prevMonthLastDayRef.row}-IF(D${rowIdx}="",0,D${rowIdx})`,
           };
         } else {
           // 6-21 是起始日，收入 = 0
           ws.getCell(`C${rowIdx}`).value = 0;
         }
       } else {
-        // 同月内：收入 = 当天金额 - 前一天金额
-        ws.getCell(`C${rowIdx}`).value = { formula: `B${rowIdx}-B${rowIdx - 1}` };
+        // 同月内：收入 = 当天金额 - 前一天金额 - 当天充值
+        ws.getCell(`C${rowIdx}`).value = { formula: `B${rowIdx}-B${rowIdx - 1}-IF(D${rowIdx}="",0,D${rowIdx})` };
       }
 
       rowIdx++;

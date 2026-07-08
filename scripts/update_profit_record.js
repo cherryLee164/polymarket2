@@ -176,7 +176,7 @@ async function main() {
     if (existingSummary === null || existingSummary === undefined || existingSummary === "") {
       ws.getCell(`A${summaryRow}`).value = `${targetMonth}月总收益`;
       ws.getCell(`B${summaryRow}`).value = {
-        formula: `LOOKUP(2,1/(B2:B${monthLastRow}<>""),B2:B${monthLastRow})-B2`,
+        formula: `LOOKUP(2,1/(B2:B${monthLastRow}<>""),B2:B${monthLastRow})-B2-SUM(D2:D${monthLastRow})`,
       };
       ws.getCell(`C${summaryRow}`).value = null;
       const bold = { font: { bold: true } };
