@@ -3,9 +3,31 @@
 const ExcelJS = require("exceljs");
 const path = require("path");
 const fs = require("fs");
+const { execSync } = require("child_process");
 
 const ROOT_DIR = path.join(__dirname, "..");
 const XLSX_PATH = path.join(ROOT_DIR, "收益记录.xlsx");
+
+function killExcelApps() {
+  for (const proc of ["EXCEL.EXE", "et.exe"]) {
+    try {
+      execSync(`taskkill /F /IM ${proc} /T`, { stdio: "ignore" });
+      console.log(`已关闭 ${proc} 以释放文件锁`);
+    } catch {}
+  }
+}
+
+async function writeXlsx(wb, filePath) {
+  try {
+    await wb.xlsx.writeFile(filePath);
+  } catch (e) {
+    if (e.code !== "EBUSY" && e.code !== "EPERM") throw e;
+    console.log("文件被占用，关闭 Excel/WPS 后重试...");
+    killExcelApps();
+    await new Promise((r) => setTimeout(r, 2000));
+    await wb.xlsx.writeFile(filePath);
+  }
+}
 
 const MONTHS = [
   { sheetName: "6月", month: 6, startDay: 21, days: 30, hasPrev: false },
@@ -87,15 +109,8 @@ async function main() {
     console.log(`  ${sheetName} C列公式已迁移（${monthLastRow - 1} 行）`);
   }
 
-  // 保存：文件被占用则报错提示关闭 Excel
-  try {
-    await wb.xlsx.writeFile(XLSX_PATH);
-  } catch (e) {
-    if (e.code === "EBUSY" || e.code === "EPERM") {
-      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
-    }
-    throw e;
-  }
+  // 保存：文件被占用则关闭 Excel/WPS 后重试
+  await writeXlsx(wb, XLSX_PATH);
   console.log(`\n保存成功: ${XLSX_PATH}`);
   console.log("迁移完成：D 列充值金额已添加，C 列收入公式已更新为扣除充值");
   console.log("充值时在 D 列填入金额即可，收入会自动扣除，不填则默认 0");

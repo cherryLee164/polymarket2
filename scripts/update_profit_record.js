@@ -5,10 +5,33 @@
 //   只指定金额（自动用昨天日期）：node scripts/update_profit_record.js 25.50
 const ExcelJS = require("exceljs");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawnSync, execSync } = require("child_process");
 
 const ROOT_DIR = path.join(__dirname, "..");
 const XLSX_PATH = path.join(ROOT_DIR, "收益记录.xlsx");
+
+// 文件被占用时关闭 Excel/WPS 进程以释放锁
+function killExcelApps() {
+  for (const proc of ["EXCEL.EXE", "et.exe"]) {
+    try {
+      execSync(`taskkill /F /IM ${proc} /T`, { stdio: "ignore" });
+      console.log(`已关闭 ${proc} 以释放文件锁`);
+    } catch {}
+  }
+}
+
+// 写入 xlsx，文件被占用则关闭 Excel/WPS 后重试
+async function writeXlsx(wb, filePath) {
+  try {
+    await wb.xlsx.writeFile(filePath);
+  } catch (e) {
+    if (e.code !== "EBUSY" && e.code !== "EPERM") throw e;
+    console.log("文件被占用，关闭 Excel/WPS 后重试...");
+    killExcelApps();
+    await new Promise((r) => setTimeout(r, 2000));
+    await wb.xlsx.writeFile(filePath);
+  }
+}
 
 // Excel 日期序列号转 YYYY-MM-DD（Excel 序列号从 1900-01-01=1 开始，含 1900-02-29 bug）
 function excelSerialToYmd(serial) {
@@ -178,15 +201,8 @@ async function main() {
     }
   }
 
-  // 保存：文件被占用则报错提示关闭 Excel
-  try {
-    await wb.xlsx.writeFile(XLSX_PATH);
-  } catch (e) {
-    if (e.code === "EBUSY" || e.code === "EPERM") {
-      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
-    }
-    throw e;
-  }
+  // 保存：文件被占用则关闭 Excel/WPS 后重试
+  await writeXlsx(wb, XLSX_PATH);
   console.log(`保存成功: ${XLSX_PATH}`);
 }
 

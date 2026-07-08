@@ -2,8 +2,30 @@
 // 用法：node scripts/init_profit_record.js
 const ExcelJS = require("exceljs");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const XLSX_PATH = path.join(__dirname, "..", "收益记录.xlsx");
+
+function killExcelApps() {
+  for (const proc of ["EXCEL.EXE", "et.exe"]) {
+    try {
+      execSync(`taskkill /F /IM ${proc} /T`, { stdio: "ignore" });
+      console.log(`已关闭 ${proc} 以释放文件锁`);
+    } catch {}
+  }
+}
+
+async function writeXlsx(wb, filePath) {
+  try {
+    await wb.xlsx.writeFile(filePath);
+  } catch (e) {
+    if (e.code !== "EBUSY" && e.code !== "EPERM") throw e;
+    console.log("文件被占用，关闭 Excel/WPS 后重试...");
+    killExcelApps();
+    await new Promise((r) => setTimeout(r, 2000));
+    await wb.xlsx.writeFile(filePath);
+  }
+}
 
 // 各月份及天数
 const MONTHS = [
@@ -79,15 +101,8 @@ async function main() {
   juneSheet.getCell("B2").value = 21.43;
   juneSheet.getCell("C2").value = 0;
 
-  // 保存：文件被占用则报错提示关闭 Excel，不生成 .new.xlsx 避免数据分裂
-  try {
-    await wb.xlsx.writeFile(XLSX_PATH);
-  } catch (e) {
-    if (e.code === "EBUSY" || e.code === "EPERM") {
-      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
-    }
-    throw e;
-  }
+  // 保存：文件被占用则关闭 Excel/WPS 后重试
+  await writeXlsx(wb, XLSX_PATH);
   console.log(`\n保存成功: ${XLSX_PATH}`);
   console.log("6-21 初始数据: 金额=21.43, 收入=0");
   console.log("其他日期金额留空，收入公式已设置");
