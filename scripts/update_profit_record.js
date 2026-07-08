@@ -9,7 +9,6 @@ const { spawnSync } = require("child_process");
 
 const ROOT_DIR = path.join(__dirname, "..");
 const XLSX_PATH = path.join(ROOT_DIR, "收益记录.xlsx");
-const XLSX_NEW_PATH = path.join(ROOT_DIR, "收益记录.new.xlsx");
 
 // Excel 日期序列号转 YYYY-MM-DD（Excel 序列号从 1900-01-01=1 开始，含 1900-02-29 bug）
 function excelSerialToYmd(serial) {
@@ -128,22 +127,15 @@ async function main() {
     process.exit(1);
   }
 
-  // 读取 xlsx（优先 .new.xlsx 因为它是最新版本，fallback 到原文件）
+  // 读取 xlsx
   const wb = new ExcelJS.Workbook();
-  let readPath;
-  const fs = require("fs");
-  if (fs.existsSync(XLSX_NEW_PATH)) {
-    readPath = XLSX_NEW_PATH;
-  } else {
-    readPath = XLSX_PATH;
-  }
   try {
-    await wb.xlsx.readFile(readPath);
+    await wb.xlsx.readFile(XLSX_PATH);
   } catch (e) {
-    console.error(`读取 ${readPath} 失败: ${e.message}`);
+    console.error(`读取 ${XLSX_PATH} 失败: ${e.message}`);
     process.exit(1);
   }
-  console.log(`读取: ${readPath}`);
+  console.log(`读取: ${XLSX_PATH}`);
 
   const ws = wb.getWorksheet(cellRef.sheetName);
   if (!ws) {
@@ -186,26 +178,14 @@ async function main() {
     }
   }
 
-  // 保存：只写原文件，被占用则重试 3 次，避免数据分裂
-  let writeOk = false;
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      await wb.xlsx.writeFile(XLSX_PATH);
-      writeOk = true;
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (e.code === "EBUSY" || e.code === "EPERM") {
-        console.log(`原文件被占用，第 ${attempt} 次重试前等待 10 秒...`);
-        await new Promise((r) => setTimeout(r, 10000));
-      } else {
-        throw e;
-      }
+  // 保存：文件被占用则报错提示关闭 Excel
+  try {
+    await wb.xlsx.writeFile(XLSX_PATH);
+  } catch (e) {
+    if (e.code === "EBUSY" || e.code === "EPERM") {
+      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
     }
-  }
-  if (!writeOk) {
-    throw new Error(`写入 xlsx 失败（重试 3 次）: ${lastErr?.message || "unknown"}`);
+    throw e;
   }
   console.log(`保存成功: ${XLSX_PATH}`);
 }

@@ -79,21 +79,16 @@ async function main() {
   juneSheet.getCell("B2").value = 21.43;
   juneSheet.getCell("C2").value = 0;
 
-  // 保存（如果原文件被 Excel 占用，写入 .new.xlsx）
-  let savePath = XLSX_PATH;
+  // 保存：文件被占用则报错提示关闭 Excel，不生成 .new.xlsx 避免数据分裂
   try {
-    await wb.xlsx.writeFile(savePath);
+    await wb.xlsx.writeFile(XLSX_PATH);
   } catch (e) {
     if (e.code === "EBUSY" || e.code === "EPERM") {
-      savePath = XLSX_PATH.replace(".xlsx", ".new.xlsx");
-      console.log(`原文件被占用，写入: ${savePath}`);
-      await wb.xlsx.writeFile(savePath);
-      console.log(`请关闭 Excel 后将 ${savePath} 重命名为 ${XLSX_PATH}`);
-    } else {
-      throw e;
+      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
     }
+    throw e;
   }
-  console.log(`\n保存成功: ${savePath}`);
+  console.log(`\n保存成功: ${XLSX_PATH}`);
   console.log("6-21 初始数据: 金额=21.43, 收入=0");
   console.log("其他日期金额留空，收入公式已设置");
   console.log("跨月引用: 7-1 收入 = 7-1 金额 - 6月!6-30 金额");

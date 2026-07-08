@@ -6,7 +6,6 @@ const fs = require("fs");
 
 const ROOT_DIR = path.join(__dirname, "..");
 const XLSX_PATH = path.join(ROOT_DIR, "收益记录.xlsx");
-const XLSX_NEW_PATH = path.join(ROOT_DIR, "收益记录.new.xlsx");
 
 const MONTHS = [
   { sheetName: "6月", month: 6, startDay: 21, days: 30, hasPrev: false },
@@ -16,7 +15,7 @@ const MONTHS = [
 ];
 
 async function main() {
-  const readPath = fs.existsSync(XLSX_NEW_PATH) ? XLSX_NEW_PATH : XLSX_PATH;
+  const readPath = XLSX_PATH;
   if (!fs.existsSync(readPath)) {
     console.error(`文件不存在: ${readPath}`);
     process.exit(1);
@@ -88,21 +87,16 @@ async function main() {
     console.log(`  ${sheetName} C列公式已迁移（${monthLastRow - 1} 行）`);
   }
 
-  // 保存：优先写原文件，被占用则 fallback 到 .new.xlsx
-  let savePath = XLSX_PATH;
+  // 保存：文件被占用则报错提示关闭 Excel
   try {
-    await wb.xlsx.writeFile(savePath);
+    await wb.xlsx.writeFile(XLSX_PATH);
   } catch (e) {
     if (e.code === "EBUSY" || e.code === "EPERM") {
-      savePath = XLSX_NEW_PATH;
-      console.log(`原文件被占用（请关闭 Excel），写入: ${savePath}`);
-      await wb.xlsx.writeFile(savePath);
-      console.log(`请关闭 Excel 后将 ${savePath} 重命名为 ${XLSX_PATH}`);
-    } else {
-      throw e;
+      throw new Error("收益记录.xlsx 被 Excel 占用，请先关闭 Excel 再重试");
     }
+    throw e;
   }
-  console.log(`\n保存成功: ${savePath}`);
+  console.log(`\n保存成功: ${XLSX_PATH}`);
   console.log("迁移完成：D 列充值金额已添加，C 列收入公式已更新为扣除充值");
   console.log("充值时在 D 列填入金额即可，收入会自动扣除，不填则默认 0");
 }
