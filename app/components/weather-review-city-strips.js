@@ -19,6 +19,7 @@ function formatDate(ymd) {
 }
 
 function formatTemp(value, unit) {
+  if (value == null) return "--";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "--";
@@ -34,6 +35,7 @@ function formatActualTemp(label, value, unit) {
 }
 
 function formatDelta(value, unit) {
+  if (value == null) return "--";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
     return "--";
@@ -45,6 +47,9 @@ function formatDelta(value, unit) {
 }
 
 function deltaToneClass(value) {
+  if (value == null) {
+    return "border-[var(--line)] bg-white text-neutral-900";
+  }
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric === 0) {
     return "border-[var(--line)] bg-white text-neutral-900";
@@ -67,6 +72,7 @@ const PAGE_SIZE = 7;
 // 区域 Tab 配置：value 对应 city config 的 region 字段
 // 未来加其他州只需在这里追加一项，并在 weather-data.js 配置对应城市
 // orderTimeBeijing 为该区域城市下单时间范围（北京时间），供人工下单参考
+// regions 用于把多个 region 合并到一个 Tab 展示
 const REGION_TABS = [
   {
     value: "domestic",
@@ -93,24 +99,20 @@ const REGION_TABS = [
     orderTimeBeijing: "00:10",
   },
   {
-    value: "south-america",
-    label: "南美",
+    value: "south-america-africa-oceania",
+    label: "南美/非洲/大洋洲",
     subtitle: "预报源：Open-Meteo · 结算源：Wunderground 机场站",
     orderTimeBeijing: "00:10",
-  },
-  {
-    value: "africa",
-    label: "非洲",
-    subtitle: "预报源：Open-Meteo · 结算源：Wunderground 机场站",
-    orderTimeBeijing: "00:10",
-  },
-  {
-    value: "oceania",
-    label: "大洋洲",
-    subtitle: "预报源：Open-Meteo · 结算源：Wunderground 机场站",
-    orderTimeBeijing: "00:10",
+    regions: ["south-america", "africa", "oceania"],
   },
 ];
+
+function rowMatchesTabRegion(row, tab) {
+  if (tab.regions && tab.regions.length > 0) {
+    return tab.regions.includes(row.region);
+  }
+  return row.region === tab.value;
+}
 
 function CityRegionStrips({ allDates, allRows, title, subtitle, orderTimeBeijing }) {
   const [page, setPage] = useState(0);
@@ -159,7 +161,7 @@ function CityRegionStrips({ allDates, allRows, title, subtitle, orderTimeBeijing
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
                 {pageDates.map((date) => {
                   const cell = cellByDate(row, date);
-                  const resolved = Number.isFinite(Number(cell?.deltaC));
+                  const resolved = cell?.deltaC != null && Number.isFinite(Number(cell?.deltaC));
                   return (
                     <div
                       key={`${row.citySlug}:${date}`}
@@ -224,12 +226,12 @@ function RegionPlaceholder({ label, subtitle, orderTimeBeijing }) {
 export function CityTemperatureStrips({ allDates, allRows }) {
   // 默认选中第一个有数据的 Tab，否则选国内
   const firstAvailable = REGION_TABS.find(
-    (tab) => !tab.placeholder && (allRows || []).some((row) => row.region === tab.value),
+    (tab) => !tab.placeholder && (allRows || []).some((row) => rowMatchesTabRegion(row, tab)),
   );
   const [activeRegion, setActiveRegion] = useState(firstAvailable?.value || "domestic");
 
   const activeTab = REGION_TABS.find((tab) => tab.value === activeRegion) || REGION_TABS[0];
-  const activeRows = (allRows || []).filter((row) => row.region === activeRegion);
+  const activeRows = (allRows || []).filter((row) => rowMatchesTabRegion(row, activeTab));
 
   return (
     <div className="space-y-4">
@@ -238,7 +240,7 @@ export function CityTemperatureStrips({ allDates, allRows }) {
         {REGION_TABS.map((tab) => {
           const tabRowCount = tab.placeholder
             ? 0
-            : (allRows || []).filter((row) => row.region === tab.value).length;
+            : (allRows || []).filter((row) => rowMatchesTabRegion(row, tab)).length;
           const isActive = tab.value === activeRegion;
           const isPlaceholder = Boolean(tab.placeholder);
           const tabClass = isPlaceholder

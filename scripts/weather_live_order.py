@@ -33,18 +33,15 @@ CAPTURE_SLOT_LABEL = os.getenv("WEATHER_LIVE_CAPTURE_SLOT_LABEL", "00:10")
 # 实盘测试：No 价格超过 90 美分不买入
 MAX_NO_PRICE = env_float("WEATHER_LIVE_MAX_NO_PRICE", 0.90)
 HIGH_PRICE_SKIP_REASON = f"no-price-above-{MAX_NO_PRICE:.2f}"
-# 下单后等待 10 分钟再检测订单是否成功，避免 API 报错但订单已成交导致重复下单
-POST_ORDER_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_POST_ORDER_WAIT_SECONDS", "600"))
+# 下单后等待 N 秒再检测订单是否成功，避免 API 报错但订单已成交导致重复下单。
+# 原 600 秒在多城市扩展时会造成 12:00  deadline 前无法完成所有城市，现默认 90 秒。
+# 已通过下单前查询账户实际持仓 + 下单后再次查询持仓来防止重复下单。
+POST_ORDER_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_POST_ORDER_WAIT_SECONDS", "90"))
 # 下单前等待：若该 candidate 此前有未确认/未成交记录则等待 10 分钟让链上状态沉淀，否则只等 60 秒
 PRE_ORDER_WAIT_SECONDS = float(os.getenv("WEATHER_LIVE_PRE_ORDER_WAIT_SECONDS", "60"))
 # 实盘下单截止时间：北京时间 12:00 后不再下当天真实单
 LIVE_ORDER_DEADLINE_HOUR = int(os.getenv("WEATHER_LIVE_DEADLINE_HOUR", "12"))
-# 虚拟测试账户：初始资金 10 美元，亏完不再下单（程序不结束）
-VIRTUAL_ACCOUNT_INITIAL_USD = float(os.getenv("WEATHER_LIVE_VIRTUAL_INITIAL_USD", "10"))
-# 实盘下单白名单：只对白名单内的城市真实下单，其余城市保持原样（模拟/不下单）
-LIVE_ORDER_CITY_SLUGS = set(
-    str(os.getenv("WEATHER_LIVE_CITY_SLUGS", "beijing")).split(",")
-)
+STAKE_PLAN_PATH = ROOT_DIR / "config" / "stake-plan.json"
 # Polymarket 最小下单金额阈值，剩余金额低于此值视为已填满，避免下 0.0001 这类无效订单
 MIN_ORDER_STAKE_USD = float(os.getenv("WEATHER_LIVE_MIN_ORDER_STAKE_USD", "0.01"))
 MAX_ORDER_ATTEMPTS = max(1, int(os.getenv("WEATHER_LIVE_MAX_ORDER_ATTEMPTS", "288")))
@@ -81,6 +78,12 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import order as order_engine  # noqa: E402
+
+# 实盘下单白名单：只对白名单内的城市真实下单，其余城市保持原样（模拟/不下单）
+# 必须在 import order 之后定义，以便 order.py 先加载 .env.order
+LIVE_ORDER_CITY_SLUGS = set(
+    str(os.getenv("WEATHER_LIVE_CITY_SLUGS", "beijing")).split(",")
+)
 
 
 def now_iso() -> str:
@@ -171,6 +174,127 @@ def read_live_stake_settings() -> Dict[str, Any]:
     }
 
 
+def read_live_stake_usd() -> float:
+    """实盘每单下单金额：优先环境变量 WEATHER_LIVE_STAKE_USD，
+    否则取 config.json 的 liveStakeUsd，最后回退到 liveBaseStake。
+    动态金额模式下此函数仅作为保底回退。"""
+    raw = str(os.getenv("WEATHER_LIVE_STAKE_USD", "")).strip()
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+    config = read_json(WEATHER_CONFIG_PATH, {})
+    value = as_float(config.get("liveStakeUsd"))
+    if value > 0:
+        return value
+    return float(LIVE_STAKE_SETTINGS.get("base") or 1)
+
+
+def read_stake_plan() -> Dict[str, Any]:
+    """读取 config/stake-plan.json 的动态下单配置。"""
+    default = {
+        "priorityCities": ["beijing", "shanghai"],
+        "availableBalanceRatio": 0.6,
+        "minStakePerCityUsd": 1.0,
+        "maxStakePerCityUsd": 20.0,
+        "thresholds": {
+            "tier1": {"maxBalance": 20.0, "stakePerCity": 1.0},
+            "tier2": {"maxBalance": 40.0, "stakePerCity": 2.0},
+            "tier3": {"maxBalance": 999999.0, "useAvailableRatio": True},
+        },
+    }
+    plan = read_json(STAKE_PLAN_PATH, default)
+    if not isinstance(plan, dict):
+        return default
+    plan.setdefault("priorityCities", default["priorityCities"])
+    plan.setdefault("availableBalanceRatio", default["availableBalanceRatio"])
+    plan.setdefault("minStakePerCityUsd", default["minStakePerCityUsd"])
+    plan.setdefault("maxStakePerCityUsd", default["maxStakePerCityUsd"])
+    plan.setdefault("thresholds", default["thresholds"])
+    return plan
+
+
+STAKE_PLAN = read_stake_plan()
+
+
+def compute_dynamic_stake_per_city(balance_usd: float) -> Dict[str, Any]:
+    """根据账户余额动态计算每个城市的下单金额。
+
+    规则：
+    - 余额 < $10: 单笔 $1，按优先级缩减城市数
+    - $10 <= 余额 < $20: 单笔 $1，10 个城市全下
+    - $20 <= 余额 < $40: 单笔 $2，10 个城市全下
+    - 余额 >= $40: round(余额 * 60% / 10)，封顶 $20
+    - 保证 10 个城市能全下：若 stake * 10 > balance 且 stake > 1，降低 stake
+    """
+    min_stake = float(STAKE_PLAN.get("minStakePerCityUsd", 1.0))
+    max_stake = float(STAKE_PLAN.get("maxStakePerCityUsd", 20.0))
+    ratio = float(STAKE_PLAN.get("availableBalanceRatio", 0.6))
+    thresholds = STAKE_PLAN.get("thresholds", {})
+
+    stake = min_stake
+    tier = "under-10"
+    if balance_usd < 10:
+        stake = min_stake
+        tier = "under-10"
+    elif balance_usd < thresholds.get("tier1", {}).get("maxBalance", 20.0):
+        stake = float(thresholds.get("tier1", {}).get("stakePerCity", 1.0))
+        tier = "tier1"
+    elif balance_usd < thresholds.get("tier2", {}).get("maxBalance", 40.0):
+        stake = float(thresholds.get("tier2", {}).get("stakePerCity", 2.0))
+        tier = "tier2"
+    else:
+        stake = round((balance_usd * ratio) / 10)
+        tier = "ratio"
+
+    # 封顶
+    stake = min(max(stake, min_stake), max_stake)
+
+    # 保证 10 城市全下：若 stake*10 > balance 且 stake > 1，降低 stake
+    downgrade_reason = None
+    if stake > min_stake and stake * 10 > balance_usd:
+        new_stake = max(min_stake, int(balance_usd / 10))
+        downgrade_reason = (
+            f"balance ${balance_usd:.2f} cannot fund {stake}*10, "
+            f"downgraded to ${new_stake}"
+        )
+        stake = new_stake
+
+    return {
+        "stakeUsd": float(stake),
+        "tier": tier,
+        "ratio": ratio,
+        "minStakePerCityUsd": min_stake,
+        "maxStakePerCityUsd": max_stake,
+        "downgradeReason": downgrade_reason,
+    }
+
+
+def get_priority_city_order(city_slugs: List[str]) -> List[str]:
+    """按 stake-plan.json 中的 priorityCities 对城市排序。不在列表中的城市排最后。"""
+    priority = list(STAKE_PLAN.get("priorityCities", []))
+
+    def sort_key(slug: str) -> int:
+        try:
+            return priority.index(slug)
+        except ValueError:
+            return len(priority)
+
+    return sorted(city_slugs, key=sort_key)
+
+
+def compute_active_cities(city_slugs: List[str], balance_usd: float) -> List[str]:
+    """余额 < $10 时按优先级缩减城市数，否则返回全部 10 个城市。"""
+    ordered = get_priority_city_order(city_slugs)
+    if balance_usd < 10:
+        max_cities = max(0, int(balance_usd))
+        return ordered[:max_cities]
+    return ordered
+
+
 def normalize_offsets(value: Any) -> List[int]:
     raw = value if isinstance(value, list) else [0]
     normalized: List[int] = []
@@ -237,6 +361,7 @@ CONFIGURED_BASE_STAKE_USD = float(LIVE_STAKE_SETTINGS.get("base") or 1)
 STAKE_SEQUENCE = LIVE_STAKE_SETTINGS["sequence"]
 BASE_STAKE_USD = STAKE_SEQUENCE[0] if STAKE_SEQUENCE else 1.0
 STRATEGY_LABEL = f"天气实盘同城 {LIVE_STAKE_SETTINGS['label']}"
+LIVE_STAKE_USD = read_live_stake_usd()
 
 def get_offset_stake_settings(temperature_offset: Any) -> Dict[str, Any]:
     offset = normalize_offset(temperature_offset)
@@ -511,38 +636,6 @@ def accounting_pnl_usd(record: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def compute_virtual_account_balance(live_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """计算虚拟测试账户余额。
-
-    虚拟账户初始资金 10 美元。每笔已下单（active）扣减成本，
-    已结算订单按 accounting_pnl_usd 计入已实现盈亏。
-    余额 = 初始 + 已实现盈亏 - 在途订单锁定的本金。
-    亏完（余额 <= 0）则不再下单，但程序继续运行不结束。
-    """
-    realized_pnl = 0.0
-    locked_stake = 0.0
-    for record in live_orders:
-        status = str(record.get("status") or "").lower()
-        if status in {"failed", "skipped", "cancelled", "canceled", "no-fill"}:
-            continue
-        stake = accounting_stake_usd(record)
-        if stake <= 0:
-            continue
-        if status == "resolved":
-            pnl = accounting_pnl_usd(record)
-            if pnl is not None:
-                realized_pnl += float(pnl)
-        else:
-            # 在途订单：本金被锁定
-            locked_stake += stake
-    current = VIRTUAL_ACCOUNT_INITIAL_USD + realized_pnl - locked_stake
-    return {
-        "initialBalanceUsd": VIRTUAL_ACCOUNT_INITIAL_USD,
-        "currentBalanceUsd": round_money(current, 6) or 0.0,
-        "realizedPnlUsd": round_money(realized_pnl, 6) or 0.0,
-        "lockedStakeUsd": round_money(locked_stake, 6) or 0.0,
-    }
-
 
 def compute_city_progression(
     city_slug: str,
@@ -603,43 +696,32 @@ def compute_city_stake(
     stake_plan: Optional[Dict[str, Any]] = None,
     source: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    # 直接复用 sim-order 的 stakeUsd，保证 live 与 sim 金额完全一致
-    if source and math.isfinite(float(source.get("stakeUsd") or 0)):
-        stake_usd = float(source["stakeUsd"])
-        return {
-            "stakeUsd": round_money(stake_usd, 6),
-            "stepIndex": 0,
-            "lossStreakBefore": 0,
-            "cyclePnlBefore": 0.0,
-            "configuredBaseStakeUsd": stake_usd,
-            "effectiveBaseStakeUsd": stake_usd,
-            "configuredStakeSequenceLabel": str(stake_usd),
-            "effectiveStakeSequenceLabel": str(stake_usd),
-            "plannedStakeTotalUsd": stake_usd,
-            "availableBalanceUsd": (stake_plan or {}).get("balanceUsd"),
-            "stakeDowngradedByBalance": False,
-            "stakeDowngradeReason": None,
-        }
-    progression = compute_city_progression(city_slug, live_orders, target_date, temperature_offset)
-    offset_settings = get_offset_stake_settings(temperature_offset)
-    planned_sequences = (stake_plan or {}).get("sequencesByOffset") or {}
-    sequence = normalize_sequence(planned_sequences.get(str(temperature_offset)) or offset_settings["sequence"])
-    step_index = min(int(progression["stepIndex"]), len(sequence) - 1)
-    stake_usd = sequence[step_index]
+    # 动态金额模式：从 stake_plan 取统一的城市下单金额
     context = stake_plan or {}
+    dynamic_config = context.get("stakePlanConfig") or compute_dynamic_stake_per_city(
+        float(context.get("balanceUsd") or 0.0)
+    )
+    stake_usd = float(dynamic_config.get("stakeUsd") or 1.0)
+    active_city_slugs = context.get("activeCitySlugs") or []
+    active_set = set(active_city_slugs)
+
+    # 如果该城市不在 active 列表中，金额置 0（后续会被跳过）
+    if active_city_slugs and city_slug not in active_set:
+        stake_usd = 0.0
+
     return {
         "stakeUsd": round_money(stake_usd, 6),
-        "stepIndex": step_index,
-        "lossStreakBefore": progression["lossStreakBefore"],
-        "cyclePnlBefore": progression["cyclePnlBefore"],
-        "configuredBaseStakeUsd": offset_settings["base"],
-        "effectiveBaseStakeUsd": sequence[0] if sequence else offset_settings["base"],
-        "configuredStakeSequenceLabel": offset_settings["label"],
-        "effectiveStakeSequenceLabel": context.get("effectiveSequenceLabel", format_stake_sequence(sequence)),
+        "stepIndex": 0,
+        "lossStreakBefore": 0,
+        "cyclePnlBefore": 0.0,
+        "configuredBaseStakeUsd": stake_usd,
+        "effectiveBaseStakeUsd": stake_usd,
+        "configuredStakeSequenceLabel": str(stake_usd),
+        "effectiveStakeSequenceLabel": str(stake_usd),
         "plannedStakeTotalUsd": context.get("requiredStakeUsd"),
         "availableBalanceUsd": context.get("balanceUsd"),
-        "stakeDowngradedByBalance": bool(context.get("downgraded")),
-        "stakeDowngradeReason": context.get("downgradeReason"),
+        "stakeDowngradedByBalance": bool(dynamic_config.get("downgradeReason")),
+        "stakeDowngradeReason": dynamic_config.get("downgradeReason"),
     }
 
 
@@ -649,50 +731,54 @@ def build_balance_aware_stake_plan(
     existing_by_key: Dict[str, Dict[str, Any]],
     target_date: str,
     balance_usd: float,
+    stake_plan_config: Optional[Dict[str, Any]] = None,
+    active_city_slugs: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    dynamic_config = stake_plan_config or compute_dynamic_stake_per_city(balance_usd)
+    stake_per_city = float(dynamic_config.get("stakeUsd") or 1.0)
+    active_set = set(active_city_slugs) if active_city_slugs else None
+
     planned_entries = []
     for source in candidates:
+        city_slug = str(source.get("citySlug"))
+        if active_set is not None and city_slug not in active_set:
+            continue
         existing_record = existing_by_key.get(order_key(source))
         if existing_record and has_confirmed_fill(existing_record):
             continue
         if existing_record and not is_retryable_unconfirmed_order(existing_record):
             continue
-        progression = compute_city_progression(
-            str(source.get("citySlug")),
-            live_orders,
-            target_date,
-            normalize_offset(source.get("temperatureOffsetC")),
-        )
         offset = normalize_offset(source.get("temperatureOffsetC"))
-        sequence = get_offset_stake_settings(offset)["sequence"]
         planned_entries.append(
             {
                 "offset": offset,
-                "stepIndex": int(progression["stepIndex"]),
-                "stakeUsd": sequence[min(int(progression["stepIndex"]), len(sequence) - 1)],
+                "stepIndex": 0,
+                "stakeUsd": stake_per_city,
+                "citySlug": city_slug,
             }
         )
 
     required_stake = round(sum(entry["stakeUsd"] for entry in planned_entries), 6)
-    downgraded = False
     sequences_by_offset = {
         str(offset): get_offset_stake_settings(offset)["sequence"]
         for offset in sorted(OFFSET_OPTIONS)
     }
     return {
-        "configuredBaseStakeUsd": None,
-        "effectiveBaseStakeUsd": None,
-        "configuredSequence": None,
-        "sequence": None,
+        "configuredBaseStakeUsd": stake_per_city,
+        "effectiveBaseStakeUsd": stake_per_city,
+        "configuredSequence": [stake_per_city],
+        "sequence": [stake_per_city],
         "sequencesByOffset": sequences_by_offset,
-        "configuredSequenceLabel": "per-offset",
-        "effectiveSequenceLabel": "per-offset",
+        "configuredSequenceLabel": str(stake_per_city),
+        "effectiveSequenceLabel": str(stake_per_city),
         "balanceUsd": round_money(balance_usd, 6) if balance_usd != float("inf") else None,
         "baseOneRequiredStakeUsd": required_stake,
         "requiredStakeUsd": required_stake,
         "plannedOrderCount": len(planned_entries),
-        "downgraded": downgraded,
-        "downgradeReason": None,
+        "downgraded": bool(dynamic_config.get("downgradeReason")),
+        "downgradeReason": dynamic_config.get("downgradeReason"),
+        "stakePlanConfig": dynamic_config,
+        "activeCitySlugs": active_city_slugs or [],
     }
 
 
@@ -1029,12 +1115,6 @@ def main() -> int:
         c for c in candidates
         if str(c.get("citySlug")) in LIVE_ORDER_CITY_SLUGS
     ]
-    candidates.sort(
-        key=lambda item: (
-            str(item.get("cityZh") or item.get("citySlug") or ""),
-            normalize_offset(item.get("temperatureOffsetC")),
-        )
-    )
     if not candidates:
         print(f"No weather candidates for {target_date} slot={CAPTURE_SLOT_ID} (whitelist={LIVE_ORDER_CITY_SLUGS})")
         return 0
@@ -1054,28 +1134,65 @@ def main() -> int:
         write_json(LIVE_ORDERS_PATH, live_orders)
     balance_status = trader.get_balance_status()
     balance_usd = float(balance_status.get("balance") or 0.0)
-    stake_plan = build_balance_aware_stake_plan(candidates, live_orders, existing_by_key, target_date, balance_usd)
-    virtual_account = compute_virtual_account_balance(live_orders)
+
+    # 动态计算每个城市的下单金额和实际下单城市集合
+    stake_plan_config = compute_dynamic_stake_per_city(balance_usd)
+    active_city_slugs = compute_active_cities(
+        list(set(str(c.get("citySlug")) for c in candidates)),
+        balance_usd,
+    )
+    active_city_set = set(active_city_slugs)
+
+    # 按优先级排序候选城市
+    candidates.sort(
+        key=lambda item: (
+            active_city_slugs.index(str(item.get("citySlug")))
+            if str(item.get("citySlug")) in active_city_set
+            else 999,
+            normalize_offset(item.get("temperatureOffsetC")),
+        )
+    )
+
+    stake_plan = build_balance_aware_stake_plan(
+        candidates, live_orders, existing_by_key, target_date, balance_usd,
+        stake_plan_config, active_city_slugs,
+    )
+    stake_plan_config_json = json.dumps(
+        {
+            "tier": stake_plan_config.get("tier"),
+            "stakeUsd": stake_plan_config.get("stakeUsd"),
+            "activeCitySlugs": active_city_slugs,
+            "downgradeReason": stake_plan_config.get("downgradeReason"),
+            "balanceUsd": balance_usd,
+        },
+        ensure_ascii=False,
+    )
     print(
         "STAKE_PLAN "
-        f"date={target_date} configured=per-offset "
-        f"effective=per-offset "
+        f"date={target_date} tier={stake_plan_config['tier']} "
+        f"stake_per_city=${stake_plan_config['stakeUsd']:.2f} "
+        f"active_cities={len(active_city_slugs)}/{len(candidates)} "
         f"orders={stake_plan['plannedOrderCount']} "
-        f"base1_required=${stake_plan['baseOneRequiredStakeUsd']:.3f} "
         f"required=${stake_plan['requiredStakeUsd']:.3f} "
         f"balance=${balance_usd:.3f} "
-        f"virtual_balance=${virtual_account['currentBalanceUsd']:.3f} "
-        f"virtual_realized_pnl=${virtual_account['realizedPnlUsd']:.3f} "
-        f"virtual_locked=${virtual_account['lockedStakeUsd']:.3f}"
+        + (f" downgrade_reason={stake_plan_config['downgradeReason']}"
+           if stake_plan_config.get("downgradeReason") else "")
+        + f" stake_plan_config_json={stake_plan_config_json}"
     )
     results = []
 
     for source in candidates:
         key = order_key(source)
         city = source.get("cityZh") or source.get("citySlug")
+        city_slug = str(source.get("citySlug"))
         # 实盘下单白名单：非白名单城市跳过，保持原样不下单
-        if str(source.get("citySlug")) not in LIVE_ORDER_CITY_SLUGS:
+        if city_slug not in LIVE_ORDER_CITY_SLUGS:
             results.append({"city": city, "status": "skipped-not-whitelisted"})
+            continue
+        # 动态金额模式下，不在 active 城市列表中的跳过（余额不足时按优先级缩减城市数）
+        if active_city_set and city_slug not in active_city_set:
+            print(f"SKIP reduced-city {city} (balance ${balance_usd:.2f})")
+            results.append({"city": city, "status": "skipped-balance-reduced"})
             continue
         existing_record = existing_by_key.get(key)
         if existing_record and has_confirmed_fill(existing_record):
@@ -1091,13 +1208,12 @@ def main() -> int:
             results.append({"city": city, "status": "skipped-existing"})
             continue
 
-        # 每个 candidate 处理前重新计算虚拟账户余额，反映前一笔下单后的最新状态
-        virtual_account = compute_virtual_account_balance(live_orders)
+        # 每个 candidate 处理前重新获取账户余额，反映前一笔下单后的最新状态
 
         live_record = None
         try:
             stake = compute_city_stake(
-                str(source.get("citySlug")),
+                city_slug,
                 live_orders,
                 target_date,
                 normalize_offset(source.get("temperatureOffsetC")),
@@ -1140,15 +1256,6 @@ def main() -> int:
                 continue
             # 用补足差额作为本次下单金额
             stake["stakeUsd"] = remaining_stake
-            # 虚拟测试账户余额检查：余额不足则跳过下单，但程序不结束
-            if virtual_account["currentBalanceUsd"] < remaining_stake:
-                print(
-                    f"SKIP virtual-account-empty {city} "
-                    f"virtual_balance=${virtual_account['currentBalanceUsd']:.3f} "
-                    f"stake=${remaining_stake:.3f}"
-                )
-                results.append({"city": city, "status": "skipped-virtual-empty"})
-                continue
             # 价格上限统一用 MAX_NO_PRICE，确保成交价不会超过 0.90
             price_cap = MAX_NO_PRICE
             if price_cap <= 0:

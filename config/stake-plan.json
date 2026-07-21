@@ -1,0 +1,32 @@
+{
+  "comment": "天气实盘动态下单金额配置。余额不同档位单笔金额不同，余额高后按可用资金率 60% 均分。",
+  "priorityCities": [
+    "beijing",
+    "hong-kong",
+    "taipei",
+    "shanghai",
+    "guangzhou",
+    "shenzhen",
+    "wuhan",
+    "chengdu",
+    "chongqing",
+    "qingdao"
+  ],
+  "availableBalanceRatio": 0.6,
+  "minStakePerCityUsd": 1.0,
+  "maxStakePerCityUsd": 20.0,
+  "thresholds": {
+    "tier1": {
+      "maxBalance": 20.0,
+      "stakePerCity": 1.0
+    },
+    "tier2": {
+      "maxBalance": 40.0,
+      "stakePerCity": 2.0
+    },
+    "tier3": {
+      "maxBalance": 999999.0,
+      "useAvailableRatio": true
+    }
+  }
+}

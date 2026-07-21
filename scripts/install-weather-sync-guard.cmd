@@ -9,21 +9,21 @@ set "TASK_NAME_PREFIX=Ploymarket Weather Sync"
 
 echo Installing Weather Sync Guard scheduled tasks...
 
-REM 任务1：用户登录时自动启动 launcher
+REM Task 1: Auto-start launcher on user logon
 schtasks /Create /TN "%TASK_NAME_PREFIX% OnLogon" /SC ONLOGON /TR "\"%NODE_BIN%\" \"%GUARD_SCRIPT%\"" /F
 echo Created OnLogon task.
 
-REM 任务2：每小时检查一次 launcher 是否存活，未运行则拉起
+REM Task 2: Hourly check if launcher is alive, restart if not running
 schtasks /Create /TN "%TASK_NAME_PREFIX% Hourly" /SC HOURLY /ST 00:10 /TR "\"%NODE_BIN%\" \"%GUARD_SCRIPT%\"" /F
 echo Created Hourly guard task.
 
-REM 配置任务设置：允许电池运行、不超时
+REM Configure task settings: allow battery, no timeout
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10); Set-ScheduledTask -TaskName '%TASK_NAME_PREFIX% OnLogon' -Settings $settings | Out-Null; Set-ScheduledTask -TaskName '%TASK_NAME_PREFIX% Hourly' -Settings $settings | Out-Null"
 
 echo.
 echo Done. Tasks installed:
-echo   - "%TASK_NAME_PREFIX% OnLogon"  (登录时自动拉起)
-echo   - "%TASK_NAME_PREFIX% Hourly"   (每小时检查保活)
+echo   - "%TASK_NAME_PREFIX% OnLogon"  (auto-start on logon)
+echo   - "%TASK_NAME_PREFIX% Hourly"   (hourly guard check)
 echo.
 echo To verify: schtasks /Query /TN "%TASK_NAME_PREFIX% OnLogon"
 echo To verify: schtasks /Query /TN "%TASK_NAME_PREFIX% Hourly"

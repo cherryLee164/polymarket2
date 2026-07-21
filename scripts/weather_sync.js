@@ -623,8 +623,11 @@ async function maybeUpdateProfitRecord() {
 // 预测进程退出条件追踪：连续 N 次 runOnce 没有 sim orders 新增，认为当天预测+sim 已完成
 let lastSimOrderCount = 0;
 let simOrdersStableRuns = 0;
-// 预测进程保底退出时间：北京时间 02:00 后强制退出，避免一直等数据源
-const PREDICT_DEADLINE_MINUTES = Number(process.env.WEATHER_PREDICT_DEADLINE_MINUTES || 120);
+// 预测进程保底退出时间：自进程启动起运行 PREDICT_DEADLINE_MINUTES 分钟后强制退出。
+// 使用相对启动时长（而非绝对北京时刻），这样无论几点开机（0:10 或之后），
+// 都能完整跑完一轮"抓取 + 每 5 分钟重试失败城市"，不会因错过 02:00 直接退出不抓数据。
+const PREDICT_DEADLINE_MINUTES = Number(process.env.WEATHER_PREDICT_DEADLINE_MINUTES || 180);
+const SYNC_STARTED_AT = Date.now();
 
 async function runOnce() {
   const modulePath = path.join(ROOT_DIR, "lib", "weather-trading-data.js");
@@ -664,7 +667,7 @@ async function runOnce() {
   }
 
   // 退出条件：当天 sim orders 已生成且连续 2 次没有新增 → 预测+sim 完成
-  // 保底：北京时间 02:00 后强制退出，避免一直等数据源
+  // 保底：启动后 PREDICT_DEADLINE_MINUTES 分钟后强制退出，避免一直等数据源
   const todayYmd = snapshot.localDate;
   const allSimOrders = readJson(SIM_ORDERS_PATH) || [];
   const todaySimOrderCount = (Array.isArray(allSimOrders) ? allSimOrders : [])
@@ -677,15 +680,22 @@ async function runOnce() {
   lastSimOrderCount = todaySimOrderCount;
 
   const beijingMinutes = getCurrentBeijingMinutes();
-  const deadlineReached = beijingMinutes >= PREDICT_DEADLINE_MINUTES;
+  const elapsedSinceStartMinutes = (Date.now() - SYNC_STARTED_AT) / 60000;
+  const deadlineReached = elapsedSinceStartMinutes >= PREDICT_DEADLINE_MINUTES;
+  // 缺失城市未补抓完时不退出，继续每 5 分钟重试（直到补全或 deadline）
+  const missingCaptureCount = (snapshot.captureBackfill?.slots || [])
+    .reduce((sum, slot) => sum + (slot.started ? slot.missingCount || 0 : 0), 0);
   const stableDone =
     todaySimOrderCount > 0 &&
     simOrdersStableRuns >= 2 &&
-    beijingMinutes >= PROFIT_UPDATE_TIME_MINUTES; // 确保 profit record（0:10 后）有机会跑
+    beijingMinutes >= PROFIT_UPDATE_TIME_MINUTES && // 确保 profit record（0:10 后）有机会跑
+    missingCaptureCount === 0; // 确保缺失城市已全部补抓
   if (stableDone || deadlineReached) {
     log(
       `predict+sim done, exiting simOrders=${todaySimOrderCount} ` +
         `stableRuns=${simOrdersStableRuns} beijingMinutes=${beijingMinutes} ` +
+        `elapsedMin=${elapsedSinceStartMinutes.toFixed(1)} ` +
+        `missingCapture=${missingCaptureCount} ` +
         `reason=${deadlineReached ? "deadline" : "stable"}`,
     );
     releaseLock();
@@ -694,6 +704,8 @@ async function runOnce() {
   log(
     `predict+sim waiting simOrders=${todaySimOrderCount} ` +
       `stableRuns=${simOrdersStableRuns} beijingMinutes=${beijingMinutes} ` +
+        `elapsedMin=${elapsedSinceStartMinutes.toFixed(1)} ` +
+        `missingCapture=${missingCaptureCount} ` +
         `deadline=${PREDICT_DEADLINE_MINUTES}`,
   );
 }
