@@ -8,6 +8,7 @@ cd "$ROOT_DIR"
 # 优先使用项目本地的 .venv 虚拟环境
 if [ -d "$ROOT_DIR/.venv/bin" ]; then
   export PATH="$ROOT_DIR/.venv/bin:$PATH"
+  export PYTHON="$ROOT_DIR/.venv/bin/python3"
 fi
 
 # 从 .env.order 加载环境变量（Node.js 不会自动加载 .env.order）

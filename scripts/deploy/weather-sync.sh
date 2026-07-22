@@ -8,6 +8,7 @@ cd "$ROOT_DIR"
 # 优先使用项目本地的 .venv 虚拟环境
 if [ -d "$ROOT_DIR/.venv/bin" ]; then
   export PATH="$ROOT_DIR/.venv/bin:$PATH"
+  export PYTHON="$ROOT_DIR/.venv/bin/python3"
 fi
 
 export WEATHER_MISSING_CAPTURE_RETRY_MS=300000
