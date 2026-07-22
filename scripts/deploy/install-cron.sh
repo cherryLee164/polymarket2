@@ -14,10 +14,8 @@ TMP_FILE=$(mktemp)
 
 cat > "$TMP_FILE" << CRONEOF
 # Polymarket 天气交易系统定时任务
-# 每天 00:00 启动天气预测+模拟下单
+# 每天 00:00 启动天气预测（跑完后自动链式启动实盘下单）
 0 0 * * * $SCRIPT_DIR/weather-sync.sh
-# 每天 00:02 启动实盘下单循环
-2 0 * * * $SCRIPT_DIR/weather-live-order.sh
 # 每小时检查天气预测进程，未运行则重启
 10 * * * * pgrep -f weather_sync_launcher > /dev/null || $SCRIPT_DIR/weather-sync.sh
 CRONEOF
