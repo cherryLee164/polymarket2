@@ -5,6 +5,11 @@
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+# 优先使用项目本地的 .venv 虚拟环境
+if [ -d "$ROOT_DIR/.venv/bin" ]; then
+  export PATH="$ROOT_DIR/.venv/bin:$PATH"
+fi
+
 # 从 .env.order 加载环境变量（Node.js 不会自动加载 .env.order）
 if [ -f ".env.order" ]; then
   # 提取 WEATHER_LIVE_CITY_SLUGS（可能带引号）
