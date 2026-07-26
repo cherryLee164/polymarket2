@@ -117,7 +117,10 @@ def main():
         o for o in live_orders
         if o.get("date") == target_date
         and o.get("status") == "pending"
-        and o.get("fillStatus") == "position-detected"
+        and (
+            o.get("fillStatus") == "position-detected"
+            or (float(o.get("actualBuyCostUsd", 0) or 0) > 0 and float(o.get("actualBuyShares", 0) or 0) > 0)
+        )
     ]
     if not today_orders:
         print(f"no today orders found for {target_date}")
