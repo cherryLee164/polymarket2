@@ -66,7 +66,7 @@ export async function POST(request) {
       const logPath = path.join(logDir, todayLog);
       const fs = await import("fs");
       const logStream = fs.createWriteStream(logPath, { flags: "a" });
-      const child = spawn("python", [scriptPath, "--amount", String(amount)], {
+      const child = spawn(process.env.PYTHON_BIN || "python3", [scriptPath, "--amount", String(amount)], {
         cwd: rootDir,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
