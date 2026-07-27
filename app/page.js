@@ -4,6 +4,7 @@ import { MonitorAutoRefresh } from "@/app/components/monitor-auto-refresh";
 import { MonitorSectionPanel } from "@/app/components/monitor-section";
 import { WeatherReviewPanel } from "@/app/components/weather-review-section";
 import { WeatherSectionPanel } from "@/app/components/weather-section";
+import { ProfitStatisticsPanel } from "@/app/components/profit-statistics-panel";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -30,7 +31,8 @@ function buildHomeHref(currentQuery, patch) {
 }
 
 function WeatherTabs({ currentQuery }) {
-  const activeTab = currentQuery.weatherTab === "review" ? "review" : "live";
+  const tabId = currentQuery.weatherTab;
+  const activeTab = tabId === "review" ? "review" : tabId === "profit" ? "profit" : "live";
   const tabs = [
     {
       id: "live",
@@ -42,11 +44,16 @@ function WeatherTabs({ currentQuery }) {
       label: "城市温差",
       helper: "国内外城市温差对比、昨日亏损名单",
     },
+    {
+      id: "profit",
+      label: "月/天收益",
+      helper: "按月切换，每天余额和收益明细",
+    },
   ];
 
   return (
     <section className="rounded-[1.6rem] border border-[var(--line)] bg-[rgba(255,255,255,0.58)] p-2 shadow-[var(--shadow)]">
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="grid gap-2 md:grid-cols-3">
         {tabs.map((tab) => {
           const active = activeTab === tab.id;
           return (
@@ -98,7 +105,8 @@ export default async function Home({ searchParams }) {
   };
 
   const isWeatherSurface = currentQuery.surface === "weather";
-  const weatherTab = currentQuery.weatherTab === "review" ? "review" : "live";
+  const weatherTabValue = currentQuery.weatherTab;
+  const weatherTab = weatherTabValue === "review" ? "review" : weatherTabValue === "profit" ? "profit" : "live";
   const monitorSnapshot = isWeatherSurface
     ? null
     : getMonitorSnapshot({
@@ -168,6 +176,7 @@ export default async function Home({ searchParams }) {
             <WeatherTabs currentQuery={currentQuery} />
             {weatherTab === "review" ? <WeatherReviewPanel /> : null}
             {weatherTab === "live" ? <WeatherSectionPanel /> : null}
+            {weatherTab === "profit" ? <ProfitStatisticsPanel /> : null}
           </>
         ) : (
           <>

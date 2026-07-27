@@ -3,6 +3,7 @@ import { WEATHER_CITY_CONFIGS, getOrderTimeBeijing } from "@/lib/weather-data";
 import { HydrationStable } from "@/app/components/hydration-stable";
 import { WeatherLiveControls } from "@/app/components/weather-live-controls";
 import { PaginatedRecordTables } from "@/app/components/weather-paginated-tables";
+import { WeatherSimulationSection } from "@/app/components/weather-simulation-section";
 
 // citySlug → region 映射，用于 live 页面按区域过滤
 const CITY_REGION_MAP = new Map(
@@ -225,54 +226,15 @@ function WeatherLiveFallback() {
 
 export async function WeatherSectionPanel() {
   const snapshot = await getWeatherDashboardSnapshot({ sync: false });
-  const liveConfig = snapshot.liveConfig || {};
-  const allRecords = (snapshot.records || []).filter((item) => item.captureSlotId === "00");
-  const simSummary = buildSimOrdersSummary(snapshot.simOrders?.records, snapshot.localDate);
-  const allDateRows = buildAllDateRows(snapshot);
 
   return (
     <HydrationStable fallback={<WeatherLiveFallback />}>
       <div className="space-y-6">
-      <section className="overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,246,224,0.92))] shadow-[var(--shadow)]">
-        <div className="flex flex-col gap-4 p-4 lg:p-5">
-          <div className="grid gap-3 md:grid-cols-4">
-            <SummaryCard
-              label="总收益"
-              value={formatMoney(simSummary.overall.netPnlUsd)}
-              helper={`${simSummary.overall.settledRecords} 笔已结算`}
-              tone={Number(simSummary.overall.netPnlUsd) >= 0 ? "up" : "down"}
-            />
-            <SummaryCard
-              label="当天收益"
-              value={formatMoney(simSummary.today.netPnlUsd)}
-              helper={formatDate(snapshot.localDate)}
-              tone={Number(simSummary.today.netPnlUsd) >= 0 ? "up" : "down"}
-            />
-            <SummaryCard
-              label="胜负统计"
-              value={`胜 ${simSummary.overall.wins} / 负 ${simSummary.overall.losses}`}
-              helper={`${simSummary.overall.settledRecords} 笔已结算`}
-              tone={simSummary.overall.wins >= simSummary.overall.losses ? "up" : "down"}
-            />
-            <SummaryCard
-              label="待结算"
-              value={`${simSummary.pendingCount} 笔`}
-              helper="温差下单策略"
-              tone="neutral"
-            />
-          </div>
-
-          <WeatherLiveControls
-            currentBaseStake={liveConfig.liveBaseStake || 1}
-            serviceStatus={snapshot.serviceStatus}
-            executionMode={liveConfig.executionMode || "live"}
-            temperatureOffsets={liveConfig.temperatureOffsets || [0]}
-            offsetStrategies={liveConfig.offsetStrategies || {}}
-          />
-        </div>
-      </section>
-
-      <PaginatedRecordTables allDateRows={allDateRows} />
+      <WeatherSimulationSection
+        simOrders={snapshot.simOrders}
+        localDate={snapshot.localDate}
+        serviceStatus={snapshot.serviceStatus}
+      />
       </div>
     </HydrationStable>
   );
