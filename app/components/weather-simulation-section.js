@@ -348,6 +348,7 @@ export function WeatherSimulationSection({ simOrders, localDate, serviceStatus }
   const [actionPending, setActionPending] = useState("");
   const [boostAmount, setBoostAmount] = useState("1");
   const [boostStatus, setBoostStatus] = useState("");
+  const [boostConfirmOpen, setBoostConfirmOpen] = useState(false);
   const [daysRange, setDaysRange] = useState(7); // 默认显示 7 天
 
   const currentServiceState = serviceStatus?.state || "stopped";
@@ -394,6 +395,17 @@ export function WeatherSimulationSection({ simOrders, localDate, serviceStatus }
     }
   }
 
+  function openBoostConfirm() {
+    if (actionPending === "boost") return;
+    setBoostStatus("");
+    setBoostConfirmOpen(true);
+  }
+
+  function closeBoostConfirm() {
+    if (actionPending === "boost") return;
+    setBoostConfirmOpen(false);
+  }
+
   async function handleBoost() {
     if (actionPending === "boost") return;
     const amount = Number(boostAmount) || 1;
@@ -408,6 +420,7 @@ export function WeatherSimulationSection({ simOrders, localDate, serviceStatus }
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "boost-failed");
       setBoostStatus(`加仓已启动：每个城市 $${amount}，日志：${data?.logFile || ""}`);
+      setBoostConfirmOpen(false);
     } catch (error) {
       setBoostStatus(`加仓失败：${error?.message || error}`);
     } finally {
@@ -472,7 +485,7 @@ export function WeatherSimulationSection({ simOrders, localDate, serviceStatus }
               />
               <button
                 type="button"
-                onClick={handleBoost}
+                onClick={openBoostConfirm}
                 disabled={Boolean(actionPending)}
                 className="rounded-full border border-[rgba(184,87,38,0.28)] bg-[rgba(184,87,38,0.10)] px-4 py-2 text-sm font-semibold text-[var(--accent-strong)] transition disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -516,6 +529,47 @@ export function WeatherSimulationSection({ simOrders, localDate, serviceStatus }
           <DailyPnlList rows={simBRecords} />
         </section>
       </div>
+
+      {boostConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+          <div className="w-full max-w-md rounded-[1.6rem] border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.18)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-xl font-semibold text-neutral-950">确认加仓下单</h3>
+                <p className="mt-2 text-sm text-[var(--ink-soft)]">
+                  即将对今日已下单的城市每个加仓 <span className="font-semibold text-[var(--accent-strong)]">${Number(boostAmount) || 1}</span>，是否继续？
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBoostConfirm}
+                disabled={Boolean(actionPending)}
+                className="rounded-full border border-[var(--line)] px-3 py-1 text-sm text-[var(--ink-soft)] disabled:opacity-60"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeBoostConfirm}
+                disabled={Boolean(actionPending)}
+                className="rounded-full border border-[var(--line)] px-5 py-2 text-sm font-semibold text-[var(--ink-soft)] transition hover:border-[var(--accent-strong)] hover:text-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleBoost}
+                disabled={Boolean(actionPending)}
+                className="rounded-full border border-[rgba(184,87,38,0.28)] bg-[rgba(184,87,38,0.10)] px-5 py-2 text-sm font-semibold text-[var(--accent-strong)] transition disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {actionPending === "boost" ? "下单中..." : "确认下单"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
