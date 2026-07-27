@@ -66,7 +66,14 @@ export async function POST(request) {
       const logPath = path.join(logDir, todayLog);
       const fs = await import("fs");
       const logStream = fs.createWriteStream(logPath, { flags: "a" });
-      const child = spawn(process.env.PYTHON_BIN || "python3", [scriptPath, "--amount", String(amount)], {
+      // 优先使用 .venv 虚拟环境的 python3（VPS 上依赖装在 .venv 里）
+      const venvPython = path.join(rootDir, ".venv", "bin", "python3");
+      let pythonBin = process.env.PYTHON_BIN || "python3";
+      try {
+        await fs.promises.access(venvPython);
+        pythonBin = venvPython;
+      } catch {}
+      const child = spawn(pythonBin, [scriptPath, "--amount", String(amount)], {
         cwd: rootDir,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
