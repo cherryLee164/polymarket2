@@ -20,7 +20,7 @@ LIVE_ORDERS_PATH = DATA_DIR / "live-orders.json"
 
 POST_ORDER_WAIT = 90
 # Polymarket 最低保证金要求，余额必须保持 >= 此值
-MIN_COLLATERAL = 2.0
+MIN_COLLATERAL = 1.0
 
 # 城市优先级（与 config/stake-plan.json 保持一致）
 PRIORITY_CITIES = [
