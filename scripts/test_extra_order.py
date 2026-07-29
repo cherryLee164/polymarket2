@@ -19,6 +19,8 @@ DATA_DIR = ROOT_DIR / "data" / "weather_predictions"
 LIVE_ORDERS_PATH = DATA_DIR / "live-orders.json"
 
 POST_ORDER_WAIT = 90
+# Polymarket 最低保证金要求，余额必须保持 >= 此值
+MIN_COLLATERAL = 2.0
 
 # 城市优先级（与 config/stake-plan.json 保持一致）
 PRIORITY_CITIES = [
@@ -144,10 +146,11 @@ def main():
     balance_usd = float(balance.get("balance", 0))
     print(f"balance=${balance_usd:.3f}")
 
-    # 余额预检：只下能负担得起的城市
-    affordable_count = int(balance_usd / extra_stake)
+    # 余额预检：只下能负担得起的城市（需保留 MIN_COLLATERAL 保证金）
+    available = max(0.0, balance_usd - MIN_COLLATERAL)
+    affordable_count = int(available / extra_stake)
     if affordable_count < len(today_orders):
-        print(f"balance ${balance_usd:.2f} can only afford {affordable_count}/{len(today_orders)} cities, truncating")
+        print(f"balance ${balance_usd:.2f} (available ${available:.2f} after ${MIN_COLLATERAL:.1f} reserve) can only afford {affordable_count}/{len(today_orders)} cities, truncating")
         today_orders = today_orders[:affordable_count]
 
     if not today_orders:

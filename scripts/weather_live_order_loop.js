@@ -361,7 +361,9 @@ async function sendExitReport(localDate, exitReason) {
     return;
   }
   const orders = getTodayWhitelistedOrders(localDate);
-  const balance = LAST_BALANCE_USD != null ? LAST_BALANCE_USD : null;
+  // 优先使用今天的余额快照（下单前，00:00记录），没有再用下单后的余额
+  const todaySnapshot = parseJsonlLast(PROFIT_BALANCE_SNAPSHOTS_PATH, (o) => o?.date === localDate && Number.isFinite(Number(o?.amount)));
+  const balance = todaySnapshot ? Number(todaySnapshot.amount) : (LAST_BALANCE_USD != null ? LAST_BALANCE_USD : null);
   const yesterdayBalance = getYesterdayBalance(localDate);
   const todayProfit = balance != null && yesterdayBalance != null
     ? roundMoney(balance - yesterdayBalance)
