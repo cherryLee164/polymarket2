@@ -188,6 +188,13 @@ def main():
             tick_size = str(raw_tick_size) if raw_tick_size != "" else None
             neg_risk = bool(market.get("negRisk") or event.get("negRisk") or False)
 
+            # 检查是否已补仓过：当前持仓 > 原始下单量 则跳过
+            original_shares = float(order.get("actualBuyShares", 0) or 0)
+            current_position = float(trader.get_position_size(token_id) or 0.0)
+            if current_position > original_shares + 0.01:
+                print(f"SKIP {city} already boosted: current={current_position:.6f} > original={original_shares:.6f}")
+                continue
+
             print(f"WAIT before-order {city} seconds=60")
             time.sleep(60)
 
