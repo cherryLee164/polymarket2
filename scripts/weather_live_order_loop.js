@@ -172,7 +172,8 @@ function getBeijingMinutes() {
   const parts = fmt.formatToParts(now);
   const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
   const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
-  return hour * 60 + minute;
+  // hour12:false 在部分 Node.js 版本午夜返回 "24"，需 % 24 转为 0，否则 00:25 → 1465 分钟触发 deadline 误退出
+  return (hour % 24) * 60 + minute;
 }
 
 function numeric(value) {
