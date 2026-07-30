@@ -375,7 +375,7 @@ ORDER_TRADING_ENABLED = parse_bool(
     get_variant_setting("TRADING_ENABLED", "true", False),
     True,
 )
-ORDER_MIN_BALANCE_USD = float(get_first_env(["ORDER_MIN_BALANCE_USD"], "2"))
+ORDER_MIN_BALANCE_USD = float(get_first_env(["ORDER_MIN_BALANCE_USD"], "1"))
 ORDER_MAX_SAMPLES = int(get_first_env(["ORDER_MAX_SAMPLES"], "0"))
 ORDER_PRICE_SIDE = get_first_env(["ORDER_PRICE_SIDE"], "BUY").upper()
 ORDER_EXECUTION_TYPE = get_first_env(["ORDER_EXECUTION_TYPE"], "FOK").upper()
