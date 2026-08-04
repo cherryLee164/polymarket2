@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { spawn } from "child_process";
 import path from "path";
-import { getWeatherDashboardSnapshot } from "@/lib/weather-trading-data";
+import { getWeatherDashboardSnapshot, addBalanceAdjustment } from "@/lib/weather-trading-data";
 import { writeWeatherLiveConfig } from "@/lib/weather-live-config";
 import { getWeatherServiceStatus, startWeatherService, stopWeatherService } from "@/lib/service-control";
 
@@ -91,6 +91,29 @@ export async function POST(request) {
           ok: true,
           message: `加仓已启动，每个城市 $${amount}`,
           logFile: todayLog,
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+          },
+        },
+      );
+    }
+    if (body?.action === "adjustment") {
+      const amount = Number(body?.amount);
+      if (!Number.isFinite(amount) || amount === 0) {
+        return NextResponse.json(
+          { error: "金额必须为非零数字" },
+          { status: 400 },
+        );
+      }
+      const note = String(body?.note || "");
+      const record = await addBalanceAdjustment(amount, note);
+      return NextResponse.json(
+        {
+          ok: true,
+          record,
+          message: amount >= 0 ? `已记录充值 $${amount}` : `已记录提现 $${Math.abs(amount)}`,
         },
         {
           headers: {
