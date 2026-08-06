@@ -124,21 +124,21 @@ export function UserTrackerSection() {
           </div>
           <div className="flex flex-wrap gap-6">
             <div className="text-right">
-              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">持仓价值</p>
-              <p className="mt-1 font-display text-2xl font-semibold text-neutral-950">
-                {formatBalance(snapshots?.latestBalance)}
+              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">累计盈亏</p>
+              <p className={`mt-1 font-display text-2xl font-semibold ${toneClass(snapshots?.latestBalance)}`}>
+                {formatMoney(snapshots?.latestBalance)}
               </p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">总投入</p>
+              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">已结算投入</p>
               <p className="mt-1 font-display text-2xl font-semibold text-neutral-950">
                 {formatBalance(snapshots?.latestInvested)}
               </p>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">持仓数</p>
+              <p className="text-xs uppercase tracking-[0.28em] text-[var(--ink-soft)]">未结算</p>
               <p className="mt-1 font-display text-2xl font-semibold text-neutral-950">
-                {snapshots?.latestPositionCount ?? "--"}
+                {snapshots?.latestPendingCount ?? "--"} 个
               </p>
             </div>
           </div>
@@ -200,20 +200,22 @@ export function UserTrackerSection() {
                   <thead className="sticky top-0 bg-[rgba(246,236,216,0.55)] text-xs text-[var(--ink-soft)]">
                     <tr>
                       <th className="px-4 py-3 font-medium">日期</th>
-                      <th className="px-4 py-3 font-medium">持仓价值</th>
+                      <th className="px-4 py-3 font-medium">累计盈亏</th>
                       <th className="px-4 py-3 font-medium">当日收益</th>
-                      <th className="px-4 py-3 font-medium">持仓数</th>
+                      <th className="px-4 py-3 font-medium">已结算</th>
+                      <th className="px-4 py-3 font-medium">未结算</th>
                     </tr>
                   </thead>
                   <tbody>
                     {currentGroup.items.map((item) => (
                       <tr key={item.date} className="border-t border-[var(--line)]">
                         <td className="px-4 py-3 font-medium text-neutral-950">{formatDate(item.date)}</td>
-                        <td className="px-4 py-3 text-[var(--ink-soft)]">{formatBalance(item.amount)}</td>
+                        <td className={`px-4 py-3 font-semibold ${toneClass(item.amount)}`}>{formatMoney(item.amount)}</td>
                         <td className={`px-4 py-3 font-semibold ${toneClass(item.pnlUsd)}`}>
                           {item.pnlUsd == null ? "--" : formatMoney(item.pnlUsd)}
                         </td>
-                        <td className="px-4 py-3 text-xs text-[var(--ink-soft)]">{item.positionCount ?? "--"}</td>
+                        <td className="px-4 py-3 text-xs text-[var(--ink-soft)]">{item.settledCount ?? "--"}</td>
+                        <td className="px-4 py-3 text-xs text-[var(--ink-soft)]">{item.pendingCount ?? "--"}</td>
                       </tr>
                     ))}
                   </tbody>

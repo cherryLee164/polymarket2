@@ -116,12 +116,14 @@ async function pollActivity() {
   }
 }
 
-// 每日快照：获取持仓总价值
+// 每日快照：统计已结算订单的累计盈亏（等结算后统一看）
 async function takeSnapshot() {
   try {
     const url = `${DATA_API_BASE}/positions?user=${TRACKED_USER_ADDRESS}&limit=200`;
     const data = await fetchWithTimeout(url);
     if (!Array.isArray(data)) return;
+
+    const today = beijingDate();
 
     // 只统计天气相关市场
     const weatherPositions = data.filter(
@@ -130,17 +132,27 @@ async function takeSnapshot() {
         (p.eventSlug || "").includes("temperature"),
     );
 
-    const totalValue = weatherPositions.reduce((s, p) => s + (Number(p.currentValue) || 0), 0);
-    const totalInvested = weatherPositions.reduce((s, p) => s + (Number(p.initialValue) || 0), 0);
-    const totalCashPnl = weatherPositions.reduce((s, p) => s + (Number(p.cashPnl) || 0), 0);
+    // 已结算：endDate < 今天 或 redeemable=true
+    const settled = weatherPositions.filter(
+      (p) => (p.endDate && p.endDate < today) || p.redeemable === true,
+    );
+    // 未结算：endDate >= 今天 且 redeemable=false
+    const pending = weatherPositions.filter(
+      (p) => !((p.endDate && p.endDate < today) || p.redeemable === true),
+    );
 
-    const date = beijingDate();
+    // 累计已实现盈亏 = 已结算订单的 cashPnl 之和
+    const realizedPnl = settled.reduce((s, p) => s + (Number(p.cashPnl) || 0), 0);
+    const settledInvested = settled.reduce((s, p) => s + (Number(p.initialValue) || 0), 0);
+    const pendingValue = pending.reduce((s, p) => s + (Number(p.currentValue) || 0), 0);
+
     const record = {
-      date,
-      amount: round(totalValue, 2),
-      totalInvested: round(totalInvested, 2),
-      totalCashPnl: round(totalCashPnl, 2),
-      positionCount: weatherPositions.length,
+      date: today,
+      amount: round(realizedPnl, 2),
+      totalInvested: round(settledInvested, 2),
+      pendingCount: pending.length,
+      pendingValue: round(pendingValue, 2),
+      settledCount: settled.length,
       capturedAt: new Date().toISOString(),
     };
 
@@ -151,19 +163,19 @@ async function takeSnapshot() {
       const todayExists = lines.some((line) => {
         try {
           const r = JSON.parse(line);
-          return r.date === date;
+          return r.date === today;
         } catch {
           return false;
         }
       });
       if (todayExists) {
-        console.log(`[${new Date().toISOString()}] 快照已存在 date=${date}, 跳过`);
+        console.log(`[${new Date().toISOString()}] 快照已存在 date=${today}, 跳过`);
         return;
       }
     } catch {}
 
     await fsp.appendFile(SNAPSHOTS_PATH, JSON.stringify(record) + "\n", "utf8");
-    console.log(`[${new Date().toISOString()}] 快照完成 date=${date} amount=${record.amount} positions=${record.positionCount}`);
+    console.log(`[${new Date().toISOString()}] 快照完成 date=${today} realizedPnl=${record.amount} settled=${record.settledCount} pending=${record.pendingCount}`);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] takeSnapshot error: ${err.message}`);
   }
